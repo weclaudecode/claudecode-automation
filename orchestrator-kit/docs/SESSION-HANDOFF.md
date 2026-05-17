@@ -1,19 +1,20 @@
 # Session handoff — implementation status
 
 Read this first in any new session. Snapshot of where the SDLC-evolution
-work stands as of `main` after commit `feat(phase-2): sweep-merges.sh
-(task 2.3.B)`.
+work stands as of `main` after commit `feat(phase-2): find-ready-tasks +
+launch-pass (task 2.3.E)`.
 
 ## TL;DR
 
 Building an autonomous orchestrator that drives `claude -p` workers through
 implementation plans, evolving from sequential single-task ticks to a
 parallel, dependency-aware SDLC. **Phase 0 + Phase 1 fully shipped; Phase 2
-Tasks 2.1, 2.2, 2.3.A, and 2.3.B done.** Next step is **Task 2.3.E**
-(launch-pass refactor) — bounded-by-MAX_PARALLEL launch loop, reads v2
-schema via `tasks.N.status == "pending"` + `orch:deps-met`. After 2.3.E
-the tick rewrite (2.3.F) can finally wire all phases together against
-the v2 schema.
+Tasks 2.1, 2.2, 2.3.A, 2.3.B, and 2.3.E done.** Next step is **Task 2.3.F**
+(wire tick) — replace `orchestrator.sh`'s body with the 5-phase sequence
+(refresh-deps → sweep-merges → review-pass guard → iterate-pass guard →
+launch-pass → plan-completion check). This is the v1 → v2 cutover for
+the orchestrator entry point. Phases 2.3.C/D (review-pass + iterate-pass)
+remain optional via `[ -x ... ]` guards in the tick body.
 
 ## Phase status
 
@@ -25,8 +26,10 @@ the v2 schema.
 | 2.1 | Strip Stop hook to smoke check | Done |
 | 2.2 | `review-pr.sh` (PR-comment reviewer with hardcoded `--disallowed-tools`) | Done + smoke-verified |
 | 2.3.A | Extract `launch-worker.sh` from `orchestrator.sh` (pure refactor) | Done |
-| 2.3.B | `sweep-merges.sh` (v2-aware pending-merge sweep) | **Done + smoke-verified (this commit)** |
-| 2.3.C-G | Remaining dispatcher sub-plan (review-pass / iterate / launch refactor / wire / harden) | Not started |
+| 2.3.B | `sweep-merges.sh` (v2-aware pending-merge sweep) | Done + smoke-verified |
+| 2.3.E | `find-ready-tasks.sh` + `launch-pass.sh` (MAX_PARALLEL-bounded launch) | **Done + smoke-verified (this commit)** |
+| 2.3.C-D | review-pass / iterate (depend on 2.3.F) | Not started |
+| 2.3.F-G | Wire tick / hardening | Not started |
 | 2.4 | Iteration cap (folded into 2.3.D) | Not started |
 | 3 | Optional auto-recommended + reviewer hard-blocks | Not started |
 | 4 | Parallel scheduler (raises `MAX_PARALLEL`) | Not started |
@@ -64,20 +67,22 @@ state — re-running the cycle is safe.
 
 ## Next concrete step
 
-**Task 2.3.E — launch-pass refactor:** Wrap the existing
-`launch-worker.sh` (Task 2.3.A) in a launch loop bounded by
-`MAX_PARALLEL=${ORCH_MAX_PARALLEL:-1}`. New
-`.claude/scripts/find-ready-tasks.sh` (interim — Phase 4 adds
-`touches:` collision detection) emits up to N pending tasks where
-status="pending" AND issue has label `orch:deps-met`. Default
-MAX_PARALLEL=1 preserves current behavior. This is the script that
-finally consumes v2 schema via `tasks.N.status == "pending"`.
+**Task 2.3.F — wire tick:** Rewrite `orchestrator.sh`'s body from "v1
+single-task launch" to the 5-phase sequence per DISPATCHER-PLAN. Body
+becomes ~30 lines: acquire lock, find oldest in_progress state file,
+then sequentially call `refresh-deps.sh` → `sweep-merges.sh` →
+`[ -x review-pass.sh ] && review-pass.sh` → `[ -x iterate-pass.sh ] &&
+iterate-pass.sh` → `launch-pass.sh "$STATE_FILE" "$REPO" "$MAX_PARALLEL"`
+→ plan-completion check (all `tasks.*.status` are `merged` or
+`blocked` → archive). This is the v1→v2 cutover for orchestrator.sh
+itself.
 
-After 2.3.E, sub-task 2.3.F can wire all phases together (refresh-deps
-→ sweep-merges → review-pass guard → iterate-pass guard → launch-pass
-→ plan-completion check). Phases 2.3.C/D remain optional since they
-depend on review-pr.sh being callable from the tick — both are guarded
-by `[ -x .../review-pass.sh ]` per DISPATCHER-PLAN.
+**Caveat for 2.3.F:** `launch-worker.sh` still writes v1 fields
+(`current_task`, `retries_for_current`, `pending_pr`). Either (a)
+update launch-worker.sh as part of 2.3.F to write v2 (`tasks.N.status
+= "in_review"`, `tasks.N.pr = N`, `tasks.N.retries`), or (b) write a
+v1→v2 reconciler that runs at the top of every tick. Option (a) is
+cleaner.
 
 **Recent smoke results (all on test-target):**
 
@@ -93,6 +98,14 @@ by `[ -x .../review-pass.sh ]` per DISPATCHER-PLAN.
   end-to-end against real PRs (PR #6 merged, PR #5 closed unmerged,
   task 3+4 untouched). Issue close + label apply + notify log all
   confirmed. test-target restored to post-ingest state after smoke.
+- **Task 2.3.E** (find-ready-tasks + launch-pass): find-ready emits
+  correct task numbers against live test-target state — N=10 returns
+  {1,2,4} (3 correctly excluded as deps-blocked), N=2 caps at first
+  two, N=0 is empty. launch-pass.sh verified parallel exec via stub
+  launcher (`ORCH_LAUNCH_WORKER` override): 2 × 2-second stubs
+  completed in 3.0s real time at MAX_PARALLEL=2; 1 stub in 2.5s at
+  MAX_PARALLEL=1. **Don't raise MAX_PARALLEL > 1 until 2.3.G ships
+  atomic state writes via flock.**
 
 ## Open decisions / deferred items
 
@@ -148,7 +161,9 @@ by `[ -x .../review-pass.sh ]` per DISPATCHER-PLAN.
     │   │   ├── refresh-deps.sh                         (Phase 1)
     │   │   ├── review-pr.sh                            (Task 2.2)
     │   │   ├── launch-worker.sh                        (Task 2.3.A)
-    │   │   ├── sweep-merges.sh                         (Task 2.3.B — just added)
+    │   │   ├── sweep-merges.sh                         (Task 2.3.B)
+    │   │   ├── find-ready-tasks.sh                     (Task 2.3.E — just added; interim)
+    │   │   ├── launch-pass.sh                          (Task 2.3.E — just added)
     │   │   ├── check-preconditions.sh                  (Phase 0)
     │   │   ├── setup-labels.sh                         (Phase 0)
     │   │   └── notify.sh                               (pre-existing)
@@ -177,6 +192,7 @@ by `[ -x .../review-pass.sh ]` per DISPATCHER-PLAN.
 
 ## Recent commits (latest first)
 
+- `35eac02` feat(phase-2): sweep-merges.sh (task 2.3.B)
 - `0b2c1e5` refactor(phase-2): extract launch-worker.sh (task 2.3.A)
 - `f8b0836` fix(phase-2): parse claude -p result entry from array form
 - `feb6323` feat(phase-2): review-pr.sh (task 2.2)
