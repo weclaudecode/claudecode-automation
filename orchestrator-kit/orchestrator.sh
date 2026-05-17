@@ -151,17 +151,31 @@ ALL_TERMINAL=$(jq -r '[.tasks[] | select(.status != "merged" and .status != "blo
 if [ "$ALL_TERMINAL" = "true" ]; then
   MERGED_COUNT=$(jq -r '[.tasks[] | select(.status == "merged")] | length' "$STATE_FILE")
   BLOCKED_COUNT=$(jq -r '[.tasks[] | select(.status == "blocked")] | length' "$STATE_FILE")
-  echo "plan $PLAN_NUM terminal: $MERGED_COUNT merged, $BLOCKED_COUNT blocked; archiving"
 
-  state_write "$STATE_FILE" '.status = "done" | .completed_at = (now | todateiso8601)' \
-    || echo "warning: failed to mark plan done in state file" >&2
+  # Task 4.3: plan-level status reflects forward progress.
+  # - any merged tasks  -> done   (partial-block plans still count as done)
+  # - zero merged tasks -> blocked (no forward progress was possible)
+  # Both still archive — operator can rescue from .claude/plans/archive/.
+  if [ "$MERGED_COUNT" -eq 0 ]; then
+    FINAL_STATUS="blocked"
+  else
+    FINAL_STATUS="done"
+  fi
+
+  echo "plan $PLAN_NUM terminal: $MERGED_COUNT merged, $BLOCKED_COUNT blocked; marking $FINAL_STATUS and archiving"
+
+  state_write "$STATE_FILE" --arg s "$FINAL_STATUS" '.status = $s | .completed_at = (now | todateiso8601)' \
+    || echo "warning: failed to mark plan $FINAL_STATUS in state file" >&2
 
   mv "$PLAN_FILE" .claude/plans/archive/ 2>/dev/null || \
     echo "warning: could not move plan file to archive (already moved?)" >&2
   mv "$STATE_FILE" .claude/plans/archive/ 2>/dev/null || \
     echo "warning: could not move state file to archive (already moved?)" >&2
 
-  if [ "$BLOCKED_COUNT" -gt 0 ]; then
+  if [ "$FINAL_STATUS" = "blocked" ]; then
+    bash "$NOTIFY" "plan $PLAN_NUM blocked" \
+      "$BLOCKED_COUNT/$TOTAL tasks blocked, 0 merged. No forward progress. Archived; rescue from .claude/plans/archive/ to retry."
+  elif [ "$BLOCKED_COUNT" -gt 0 ]; then
     bash "$NOTIFY" "plan $PLAN_NUM done with blocks" \
       "$MERGED_COUNT/$TOTAL merged, $BLOCKED_COUNT blocked. Archived; rescue from .claude/plans/archive/ to retry."
   else

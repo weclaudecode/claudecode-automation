@@ -3,20 +3,25 @@
 #
 # Usage: find-ready-tasks.sh <state_file> <max_tasks> [<owner/repo>]
 #
-# A task is "ready" iff:
+# A task is "ready" iff ALL of:
 #   - tasks.N.status == "pending"
 #   - tasks.N.issue is set
 #   - that issue has the `orch:deps-met` label on GitHub
+#   - tasks.N.touches do NOT collide (after glob expansion) with any
+#     already-emitted candidate this call, nor with any task currently
+#     in {in_progress, in_review} (file collision detection — Phase 4).
 #
 # Output: up to <max_tasks> task numbers, one per line, in numerical
 # order. Empty output is valid (nothing ready).
 #
-# Interim implementation. The Phase 4 version adds `touches:` collision
-# detection — i.e., reject candidates whose globs overlap with any
-# currently-in_review task. Until then, MAX_PARALLEL=1 is the safe
-# default (no collision risk with a single worker).
+# Glob intersection model (per SDLC-EVOLUTION-PLAN Task 4.1):
+#   Expand each side's touches: against the worktree file list (Python
+#   glob.glob with recursive=True); two entries collide iff their
+#   expanded concrete-path sets share any file. Literal paths that name
+#   files not yet tracked expand to the empty set — those collide only
+#   at push/merge time, which Task 4.4's rebase-pr.sh handles.
 #
-# Optimization: one `gh issue list --label orch:task,orch:deps-met
+# Optimization: one `gh issue list --label orch:task --label orch:deps-met
 # --state open` call returns ALL eligible issues; we intersect with the
 # pending tasks in state.json. O(1) HTTP calls regardless of plan size.
 #
@@ -28,6 +33,10 @@ set -uo pipefail
 
 command -v jq >/dev/null || { echo "find-ready: jq required" >&2; exit 1; }
 command -v gh >/dev/null || { echo "find-ready: gh required" >&2; exit 1; }
+command -v python3 >/dev/null || {
+  echo "find-ready: python3 required (used for glob expansion)" >&2
+  exit 1
+}
 
 if [ $# -lt 2 ]; then
   echo "usage: $0 <state_file> <max_tasks> [<owner/repo>]" >&2
@@ -68,7 +77,6 @@ if [ -z "$PENDING" ]; then
 fi
 
 # Single gh call: get all open deps-met-labeled task issues.
-# --search lets us combine multiple label filters; AND is implicit.
 DEPS_MET_ISSUES=$(gh issue list \
   --repo "$REPO" \
   --label "orch:task" \
@@ -82,17 +90,62 @@ if [ -z "$DEPS_MET_ISSUES" ]; then
   exit 0
 fi
 
-# Intersect pending-tasks-with-issues against deps-met issues.
-# Emit task numbers in numerical order, capped at MAX.
-COUNT=0
-while read -r task_num issue_num; do
-  [ -z "$task_num" ] && continue
-  [ "$COUNT" -ge "$MAX" ] && break
-  # Word-boundary match against the deps-met issue list
-  if echo " $DEPS_MET_ISSUES " | grep -q " $issue_num "; then
-    echo "$task_num"
-    COUNT=$((COUNT + 1))
-  fi
-done < <(printf '%s\n' "$PENDING" | sort -n -k1)
+# Glob-aware collision filter. Python loads state.json, expands touches
+# globs against the cwd file tree, and emits the safe task numbers.
+# We pass state path, MAX, and deps-met issue set on argv; Python does
+# the rest in one process (cheaper than per-candidate subshells).
+#
+# IMPORTANT: cwd here is the orchestrator's repo root — glob expansion
+# uses that tree. Workers run in worktrees off the same commit, so the
+# expanded file sets match what each worker will see when it starts.
+python3 - "$STATE_FILE" "$MAX" "$DEPS_MET_ISSUES" <<'PY'
+import json, sys, glob
+
+state_path = sys.argv[1]
+max_emit = int(sys.argv[2])
+deps_met_issues = set(sys.argv[3].split()) if sys.argv[3] else set()
+
+with open(state_path) as f:
+    state = json.load(f)
+
+tasks = state.get('tasks', {})
+
+def expand(touches):
+    """Expand a list of gitignore-syntax globs against cwd. Returns the
+    concrete set of paths that currently exist. Literal entries for
+    non-existent files expand to nothing — collision with such paths is
+    caught later by Task 4.4's rebase-pr.sh, not here."""
+    paths = set()
+    for g in touches or []:
+        paths.update(glob.glob(g, recursive=True))
+    return paths
+
+# In-flight = anything still consuming a worker slot or owning an open PR.
+# Both states are file-claims we must not collide with.
+in_flight_paths = set()
+for tnum, t in tasks.items():
+    if t.get('status') in ('in_progress', 'in_review'):
+        in_flight_paths |= expand(t.get('touches', []))
+
+# Iterate pending+deps-met in numerical task order. Emit non-colliding
+# ones; merge each emission's paths into in_flight_paths so the next
+# candidate in the same tick sees them too.
+emitted = 0
+for tnum in sorted(tasks.keys(), key=lambda k: int(k)):
+    if emitted >= max_emit:
+        break
+    t = tasks[tnum]
+    if t.get('status') != 'pending':
+        continue
+    issue = t.get('issue')
+    if issue is None or str(issue) not in deps_met_issues:
+        continue
+    candidate_paths = expand(t.get('touches', []))
+    if candidate_paths & in_flight_paths:
+        continue
+    print(tnum)
+    in_flight_paths |= candidate_paths
+    emitted += 1
+PY
 
 exit 0

@@ -47,6 +47,7 @@ jq -e '.tasks | type == "object"' "$STATE_FILE" >/dev/null 2>&1 || {
 
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
 REVIEWER="${ORCH_REVIEW_PR:-$REPO_ROOT/.claude/scripts/review-pr.sh}"
+REBASE_PR="${ORCH_REBASE_PR:-$REPO_ROOT/.claude/scripts/rebase-pr.sh}"
 MAX_REVIEWS="${ORCH_MAX_PARALLEL_REVIEWS:-${ORCH_MAX_PARALLEL:-1}}"
 
 [ -x "$REVIEWER" ] || {
@@ -57,6 +58,10 @@ MAX_REVIEWS="${ORCH_MAX_PARALLEL_REVIEWS:-${ORCH_MAX_PARALLEL:-1}}"
   echo "review-pass: max_parallel_reviews must be numeric, got '$MAX_REVIEWS'" >&2
   exit 1
 }
+# rebase-pr.sh is optional — if absent, CONFLICTING PRs are simply left
+# alone and the next tick will see them again. Log once if missing.
+HAVE_REBASE=0
+[ -x "$REBASE_PR" ] && HAVE_REBASE=1
 
 # Build list: task_num pr_num
 REVIEW_LIST=$(jq -r '
@@ -73,6 +78,8 @@ fi
 LAUNCHED=0
 SKIPPED=0
 NOT_OPEN=0
+REBASED=0
+CONFLICT_DEFERRED=0
 REVIEWER_PIDS=()
 
 # Poll-based slot cap. Wait until live PIDs count < MAX_REVIEWS.
@@ -95,8 +102,8 @@ wait_for_slot() {
 while read -r task_num pr_num; do
   [ -z "$task_num" ] && continue
 
-  # One gh call for body + sha + state
-  PR_INFO=$(gh pr view "$pr_num" --repo "$REPO" --json body,headRefOid,state 2>/dev/null || echo "")
+  # One gh call for body + sha + state + mergeable
+  PR_INFO=$(gh pr view "$pr_num" --repo "$REPO" --json body,headRefOid,state,mergeable 2>/dev/null || echo "")
   if [ -z "$PR_INFO" ]; then
     echo "review-pass: failed to fetch PR #$pr_num (task $task_num); skipping" >&2
     continue
@@ -106,6 +113,26 @@ while read -r task_num pr_num; do
   if [ "$PR_STATE" != "OPEN" ]; then
     echo "review-pass: PR #$pr_num task $task_num is $PR_STATE — skipping (sweep-merges owns this)"
     NOT_OPEN=$((NOT_OPEN + 1))
+    continue
+  fi
+
+  # Task 4.4: if mergeable=CONFLICTING, hand off to rebase-pr.sh and skip
+  # review this tick. UNKNOWN (GitHub still computing) is left to next
+  # tick. The HEAD SHA marker comparison comes after — a successful
+  # rebase advances the SHA, so the *next* tick re-reviews fresh.
+  MERGEABLE=$(echo "$PR_INFO" | jq -r '.mergeable // "UNKNOWN"')
+  if [ "$MERGEABLE" = "CONFLICTING" ]; then
+    if [ "$HAVE_REBASE" -eq 1 ]; then
+      echo "review-pass: PR #$pr_num task $task_num CONFLICTING — invoking rebase-pr.sh"
+      if bash "$REBASE_PR" "$pr_num" "$REPO"; then
+        REBASED=$((REBASED + 1))
+      else
+        CONFLICT_DEFERRED=$((CONFLICT_DEFERRED + 1))
+      fi
+    else
+      echo "review-pass: PR #$pr_num CONFLICTING but rebase-pr.sh missing — deferring"
+      CONFLICT_DEFERRED=$((CONFLICT_DEFERRED + 1))
+    fi
     continue
   fi
 
@@ -133,5 +160,5 @@ for p in "${REVIEWER_PIDS[@]+"${REVIEWER_PIDS[@]}"}"; do
   wait "$p" 2>/dev/null || true
 done
 
-echo "review-pass: done — launched=$LAUNCHED skipped=$SKIPPED not_open=$NOT_OPEN"
+echo "review-pass: done — launched=$LAUNCHED skipped=$SKIPPED not_open=$NOT_OPEN rebased=$REBASED conflict_deferred=$CONFLICT_DEFERRED"
 exit 0
