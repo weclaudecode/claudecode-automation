@@ -304,6 +304,8 @@ match `Edit`, `Write`, or any of the denied `Bash(...)` forms.
 
 **File:** `orchestrator-kit/orchestrator.sh:1-end` (significant refactor)
 
+> **Sub-plan:** [`DISPATCHER-PLAN.md`](DISPATCHER-PLAN.md) breaks this task into 7 sub-tasks (A-G) with the state machine, lock model, and rollout sequence detailed.
+
 The tick becomes a priority queue dispatcher. Order per tick:
 
 1. **Refresh deps:** `refresh-deps.sh`
