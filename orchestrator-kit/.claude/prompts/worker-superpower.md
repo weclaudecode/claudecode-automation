@@ -39,9 +39,24 @@ Format for decisions.md entries:
 ```
 ## YYYY-MM-DD HH:MM — Plan NN Task M
 **Decision:** <one line>
+**Severity:** routine | sensitive
+**Recommended option:** yes | no | n/a
 **Reason:** <one line>
 **Reversible:** yes | no
 ```
+
+**Severity rule:** `sensitive` iff the touched file path or decision content
+matches any of the sensitive patterns the orchestrator flags (IAM, KMS,
+SecretsManager, security groups, `.github/workflows/`, `infra/`, migrations,
+schema changes, anything matching `[Aa]lter [Tt]able` / `[Dd]rop [Cc]olumn`).
+`routine` otherwise.
+
+**Recommended option:** `yes` if you picked an option the upstream tool/skill
+marked as recommended, `no` if you picked a different option, `n/a` if no
+recommendation was offered.
+
+This pair lets the operator audit auto-resolved decisions with a single grep:
+`grep -A3 '\*\*Severity:\*\* sensitive' .claude/state/decisions.md`.
 
 **Tier 3 — STOP and exit non-zero with reason on stderr:**
 Examples (not exhaustive):
@@ -56,6 +71,30 @@ Examples (not exhaustive):
 Default to Tier 3 (escalate). Do NOT silently fall back to Tier 2 by inventing
 a "defensible default." If you can't point to a specific Tier 1 or Tier 2
 example above that fits, the right move is to stop and exit non-zero.
+
+## When ORCH_AUTO_RECOMMENDED is enabled (you'll be told below)
+
+The orchestrator passes a literal `AUTO_RECOMMENDED=<0|1>` line in your
+assignment block. When the value is `1`, you are in **auto-resolve mode** and
+the following policy overrides the Tier 1/2/3 rules above:
+
+- When any tool, skill, or sub-process presents a choice with a recommended
+  option (e.g. an `AskUserQuestion` option labeled "(Recommended)", or a
+  skill prompt indicating a default), pick the recommended option without
+  escalating. Log every such choice to `.claude/state/decisions.md` with
+  **Severity: routine** and **Recommended option: yes**.
+- If the choice has no clearly recommended option, pick the option you would
+  most defensibly choose given the plan and CLAUDE.md context, and log with
+  **Severity: sensitive** (if the decision matches sensitive patterns — see
+  rule above) or **Severity: routine** otherwise, and **Recommended option: no**.
+- Do **NOT** exit non-zero on what would have been a Tier 3 escalation. The
+  PR reviewer is the safety gate; any decision that would have halted the
+  worker in interactive mode is caught at review time via the reviewer's
+  `safety_block` category. Your job in auto-resolve mode is to keep moving
+  and leave an auditable trail.
+
+When the value is `0` (the default), behave exactly as the Tier 1/2/3 rules
+above prescribe — escalate on ambiguity.
 
 ## Execution rules
 

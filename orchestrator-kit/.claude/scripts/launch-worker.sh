@@ -73,7 +73,26 @@ PLAN_BASE=$(basename "$PLAN_FILE" .md)
 PLAN_NUM=$(echo "$PLAN_BASE" | grep -oE 'PLAN-[0-9]+' | grep -oE '[0-9]+' || echo "00")
 
 AUTO_MERGE=$(jq -r --arg t "$TASK_NUM" '.auto_merge_overrides[$t] // true' "$STATE_FILE")
-echo "launch-worker: task=$TASK_NUM/$TOTAL retries=$RETRIES auto-merge=$AUTO_MERGE"
+
+# Auto-recommended precedence: state.auto_recommended (per-plan) > env var > 0.
+# Per-plan override (Task 3.4) lets an operator opt one experimental plan
+# into auto-resolve without flipping the global ORCH_AUTO_RECOMMENDED.
+#
+# Use `has(...)` rather than `// empty`: jq's `//` triggers on `false` as
+# well as `null`, which would silently drop a per-plan `false` and let the
+# env var leak through.
+PLAN_AUTO_REC=$(jq -r 'if has("auto_recommended") then .auto_recommended else "" end' "$STATE_FILE")
+case "$PLAN_AUTO_REC" in
+  true)  AUTO_RECOMMENDED=1 ;;
+  false) AUTO_RECOMMENDED=0 ;;
+  "")    AUTO_RECOMMENDED="${ORCH_AUTO_RECOMMENDED:-0}" ;;
+  *)
+    echo "launch-worker: invalid state.auto_recommended '$PLAN_AUTO_REC' (expected true|false); falling back to env" >&2
+    AUTO_RECOMMENDED="${ORCH_AUTO_RECOMMENDED:-0}"
+    ;;
+esac
+
+echo "launch-worker: task=$TASK_NUM/$TOTAL retries=$RETRIES auto-merge=$AUTO_MERGE auto-recommended=$AUTO_RECOMMENDED"
 
 # Atomic state write helper — delegates to lib (mkdir-based lock makes
 # this safe with MAX_PARALLEL > 1).
@@ -138,6 +157,8 @@ WORKER_FULL_PROMPT="$(cat "$WORKER_PROMPT_FILE")
 $REPO/$PLAN_FILE
 
 ## Your assignment
+
+AUTO_RECOMMENDED=${AUTO_RECOMMENDED}
 
 Execute Task ${TASK_NUM} of ${TOTAL}. The full task spec follows verbatim. Do
 not start any other task. Mark each step's checkbox as you go. Commit at the

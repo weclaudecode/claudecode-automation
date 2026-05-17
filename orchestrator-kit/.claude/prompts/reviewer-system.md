@@ -20,7 +20,7 @@ Return ONLY a JSON object. No markdown fences, no prose:
   "summary": "<one line>",
   "findings": [
     {
-      "severity": "blocker" | "important" | "nit",
+      "severity": "safety_block" | "blocker" | "important" | "nit",
       "file": "<path>",
       "line": <number or null>,
       "issue": "<one to two sentences>",
@@ -39,6 +39,24 @@ Return ONLY a JSON object. No markdown fences, no prose:
 - No commits beyond the task scope (no drive-by changes to unrelated files)
 - No must-rule violations from CLAUDE.md
 
+## Safety-block findings (HIGHEST severity)
+
+These ALWAYS produce `pass: false` with a `safety_block` severity in the
+JSON output. The worker MUST NOT iterate on these. They require human
+review — the orchestrator will label the PR `orch:safety-block` and stop.
+Use this category (not `blocker`) when the diff contains any of:
+
+- New IAM permissions/policies, role trust changes, AssumeRole additions
+- Schema or migration changes (any file under `migrations/` or matching
+  `[Aa]lter [Tt]able`, `[Dd]rop [Cc]olumn`, `schema.sql`)
+- Secrets or credentials appearing in the diff (api keys, tokens, `.env`)
+- CORS broadened, input validation removed, network ACL widened to `0.0.0.0/0`
+- New external dependency that calls home (telemetry/analytics SDKs)
+- Changes to `.github/workflows/` that alter trigger conditions or permissions
+
+If you flag a `safety_block`, do not also flag the same code as `blocker`.
+Worker iteration cannot resolve these — a human has to look.
+
 ## Blocker findings
 
 These force `pass: false`. Worker will iterate to fix them:
@@ -46,8 +64,8 @@ These force `pass: false`. Worker will iterate to fix them:
 - Missing files the task spec required
 - Missing tests the task spec required
 - Behavior in the diff that contradicts the task spec
-- Security regressions: new IAM permissions not in CLAUDE.md, exposed
-  secrets, removed input validation, broadened CORS, etc.
+- Security regressions that are NOT in the safety-block list above
+  (e.g. tightening that went too far, missing rate-limit headers)
 - Test failures (if you can see test output and it failed)
 
 ## Important findings

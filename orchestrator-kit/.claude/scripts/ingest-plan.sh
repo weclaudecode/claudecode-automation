@@ -53,6 +53,40 @@ if [ -f "$STATE_FILE" ]; then
   exit 1
 fi
 
+# ---- Pass 0: optional YAML frontmatter ----
+# Recognized keys (extend cautiously — frontmatter is an exception path, not
+# the primary config surface):
+#   auto_recommended: true|false   per-plan override of $ORCH_AUTO_RECOMMENDED
+#                                  (Task 3.4); evaluated per-task at spawn time.
+#
+# Frontmatter must start on line 1 with `---` and close with `---` on its own
+# line; otherwise the document is treated as having no frontmatter. Unknown
+# keys are silently ignored so future versions can add fields without
+# breaking older ingest scripts.
+# Emit the raw value (whatever follows `auto_recommended:`) so the case
+# statement below catches bad values like `yes`/`on` instead of silently
+# treating them as the default. The silent-failure mode is exactly what
+# this kit's CLAUDE.md warns about for ingest parsing.
+AUTO_REC=$("$GAWK" '
+  NR == 1 { if ($0 != "---") exit; in_fm = 1; next }
+  /^---$/ && in_fm { exit }
+  in_fm && /^auto_recommended:/ {
+    sub(/^auto_recommended:[[:space:]]*/, "")
+    sub(/[[:space:]]*$/, "")
+    print
+  }
+' "$PLAN")
+
+case "$AUTO_REC" in
+  true)  AUTO_REC_JSON="true" ;;
+  false) AUTO_REC_JSON="false" ;;
+  "")    AUTO_REC_JSON="false" ;;
+  *)
+    echo "ingest-plan: invalid auto_recommended value '$AUTO_REC' (expected true|false)" >&2
+    exit 1
+    ;;
+esac
+
 # ---- Pass 1: parse tasks ----
 # Per-task gawk pass emits one JSON object per line with fields parsed
 # from the task header. Validation happens in a second pass so we can
@@ -262,12 +296,14 @@ jq -n \
   --argjson total "$TOTAL" \
   --argjson tasks "$TASKS_OBJECT" \
   --argjson overrides "$OVERRIDES" \
+  --argjson auto_rec "$AUTO_REC_JSON" \
   '{
     plan_file: $plan_file,
     total_tasks: $total,
     status: "in_progress",
     tasks: $tasks,
     auto_merge_overrides: $overrides,
+    auto_recommended: $auto_rec,
     ingested_at: (now | todateiso8601)
   }' > "$STATE_FILE"
 
@@ -275,6 +311,7 @@ jq -n \
 echo "Ingested: $PLAN"
 echo "  Tasks:                $TOTAL"
 echo "  Auto-merge disabled:  $(echo "$OVERRIDES" | jq -r 'keys | join(", ") // "none"')"
+echo "  Auto-recommended:     $AUTO_REC_JSON"
 echo "  State file:           $STATE_FILE"
 echo
 echo "Review the state file, edit auto_merge_overrides if needed, then create issues:"

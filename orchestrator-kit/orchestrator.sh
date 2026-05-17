@@ -31,6 +31,12 @@ LOG=".claude/state/orchestrator.log"
 NOTIFY=".claude/scripts/notify.sh"
 MAX_PARALLEL="${ORCH_MAX_PARALLEL:-1}"
 LOG_MAX_BYTES="${ORCH_LOG_MAX_BYTES:-10485760}"  # 10 MiB default
+# Auto-resolve toggle (Task 3.1). 0 = workers escalate on Tier-3 ambiguity
+# (default); 1 = workers pick the recommended/defensible option and the PR
+# reviewer's safety_block category becomes the gate. Per-plan frontmatter
+# (state.auto_recommended) overrides this; see launch-worker.sh precedence.
+AUTO_RECOMMENDED="${ORCH_AUTO_RECOMMENDED:-0}"
+export ORCH_AUTO_RECOMMENDED="$AUTO_RECOMMENDED"
 
 mkdir -p .claude/state .claude/plans/archive
 
@@ -105,7 +111,7 @@ if [ -z "$REPO_OWNER_REPO" ]; then
   exit 1
 fi
 
-echo "plan: $PLAN_FILE  total: $TOTAL  max_parallel: $MAX_PARALLEL  repo: $REPO_OWNER_REPO"
+echo "plan: $PLAN_FILE  total: $TOTAL  max_parallel: $MAX_PARALLEL  auto_recommended: $AUTO_RECOMMENDED  repo: $REPO_OWNER_REPO"
 
 # ---- Phase 1: refresh deps ----
 echo "--- phase 1: refresh deps ---"
