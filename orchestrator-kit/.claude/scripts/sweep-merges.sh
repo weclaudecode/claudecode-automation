@@ -104,6 +104,16 @@ while read -r task_num pr_num issue_num; do
             --comment "Auto-closed by orchestrator after PR #$pr_num merged." >/dev/null 2>&1 \
             || echo "sweep-merges: warning — failed to close issue #$issue_num (already closed?)" >&2
         fi
+        # Task 5.2: fork post-merge CI watcher. Logs to its own file so
+        # the tick's main log doesn't fill with poll output. We disown
+        # so the watcher survives the tick exit; it's notification-only.
+        PMC="$REPO_ROOT/.claude/scripts/post-merge-check.sh"
+        if [ -x "$PMC" ]; then
+          PMC_LOG="$REPO_ROOT/.claude/state/post-merge-pr${pr_num}.log"
+          nohup bash "$PMC" "$pr_num" "$REPO" >> "$PMC_LOG" 2>&1 &
+          disown 2>/dev/null || true
+          echo "sweep-merges: forked post-merge-check for PR #$pr_num (PID $!, log: $PMC_LOG)"
+        fi
       else
         ERROR_COUNT=$((ERROR_COUNT + 1))
       fi

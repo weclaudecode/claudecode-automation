@@ -42,6 +42,8 @@ cat >> .gitignore <<'EOF'
 # Claude Code orchestrator runtime state
 .claude/state/orchestrator.lock/
 .claude/state/run-*.json
+.claude/state/post-merge-pr*.log
+.claude/state/active_worktrees.txt
 EOF
 ```
 

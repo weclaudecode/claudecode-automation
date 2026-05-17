@@ -183,4 +183,27 @@ if [ "$ALL_TERMINAL" = "true" ]; then
   fi
 fi
 
+# ---- Dashboard refresh (Task 5.1) ----
+# Best-effort. Failures here are dashboard noise, not correctness bugs —
+# the rest of the tick has already completed.
+#
+# If the plan archived this tick, the state file moved to .claude/plans/
+# archive/ and the path here points there; the script reads the archived
+# state and posts a final "done"/"blocked" snapshot before exiting.
+DASHBOARD=".claude/scripts/plan-status.sh"
+if [ -x "$DASHBOARD" ]; then
+  echo "--- phase 6: dashboard refresh ---"
+  if [ -f "$STATE_FILE" ]; then
+    DASHBOARD_STATE="$STATE_FILE"
+  else
+    DASHBOARD_STATE=".claude/plans/archive/$(basename "$STATE_FILE")"
+  fi
+  if [ -f "$DASHBOARD_STATE" ]; then
+    bash "$DASHBOARD" "$DASHBOARD_STATE" "$REPO_OWNER_REPO" || \
+      echo "warning: plan-status exited non-zero (continuing)" >&2
+  else
+    echo "warning: state file not found at $STATE_FILE or archive/ — skipping dashboard" >&2
+  fi
+fi
+
 echo "tick done"
