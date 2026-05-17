@@ -315,7 +315,10 @@ REVIEW_RESPONSE=$(echo "$REVIEW_PAYLOAD" \
 
 REVIEW_ID=$(echo "$REVIEW_RESPONSE" | jq -r '.id // "?"' 2>/dev/null || echo "?")
 
-# ---- Apply orch:safety-block label if needed ----
+# ---- Apply / remove labels based on verdict ----
+# orch:safety-block on any safety finding (operator-only; never auto-iterates).
+# orch:review-blocked on any regular blocker (iterate-pass.sh filter).
+# On approve, remove review-blocked so iterate-pass stops considering it.
 if [ "$HAS_SAFETY" -gt 0 ]; then
   if gh label list --repo "$REPO" --search "orch:safety-block" 2>/dev/null | grep -q 'orch:safety-block'; then
     gh pr edit "$PR_NUM" --repo "$REPO" --add-label "orch:safety-block" >/dev/null 2>&1 \
@@ -323,6 +326,20 @@ if [ "$HAS_SAFETY" -gt 0 ]; then
   else
     echo "review-pr: warning — orch:safety-block label missing on repo; skipping label apply" >&2
   fi
+fi
+
+if [ "$HAS_BLOCKER" -gt 0 ]; then
+  if gh label list --repo "$REPO" --search "orch:review-blocked" 2>/dev/null | grep -q 'orch:review-blocked'; then
+    gh pr edit "$PR_NUM" --repo "$REPO" --add-label "orch:review-blocked" >/dev/null 2>&1 \
+      || echo "review-pr: warning — failed to apply orch:review-blocked label" >&2
+  else
+    echo "review-pr: warning — orch:review-blocked label missing on repo; skipping label apply" >&2
+  fi
+elif [ "$EVENT" = "APPROVE" ]; then
+  # --remove-label is a no-op (exit 0) if the label isn't on the PR, so it's
+  # safe to call unconditionally on every approve.
+  gh pr edit "$PR_NUM" --repo "$REPO" --remove-label "orch:review-blocked" >/dev/null 2>&1 \
+    || true
 fi
 
 # ---- Update PR body with iteration markers ----
