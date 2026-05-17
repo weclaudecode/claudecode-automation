@@ -208,10 +208,23 @@ if [ $CLAUDE_EXIT -ne 0 ]; then
   exit 2
 fi
 
-# Extract the reviewer's text result (the final assistant message body).
-RESULT_TEXT=$(jq -r '.result // empty' "$RUN_OUT" 2>/dev/null)
+# Extract the reviewer's text result. `claude -p --output-format json`
+# emits a JSON array of message objects; the final one has type=result
+# and a .result field holding the assistant's text.
+RESULT_TEXT=$(jq -r '.[] | select(.type == "result") | .result // empty' "$RUN_OUT" 2>/dev/null)
 if [ -z "$RESULT_TEXT" ]; then
-  echo "review-pr: claude output had no .result field" >&2
+  echo "review-pr: claude output had no result entry" >&2
+  echo "review-pr: tail of output:" >&2
+  tail -20 "$RUN_OUT" >&2
+  exit 2
+fi
+
+# Also surface any error flag from the result entry.
+RESULT_IS_ERROR=$(jq -r '.[] | select(.type == "result") | .is_error // false' "$RUN_OUT" 2>/dev/null)
+if [ "$RESULT_IS_ERROR" = "true" ]; then
+  echo "review-pr: reviewer reported is_error=true" >&2
+  echo "review-pr: raw result:" >&2
+  printf '%s\n' "$RESULT_TEXT" | head -40 >&2
   exit 2
 fi
 
