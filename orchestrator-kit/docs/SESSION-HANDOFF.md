@@ -1,17 +1,17 @@
 # Session handoff — implementation status
 
 Read this first in any new session. Snapshot of where the SDLC-evolution
-work stands as of `main` after commit `feat(phase-2): strip stop hook to
-smoke check (task 2.1)`.
+work stands as of `main` after commit `feat(phase-2): review-pr.sh
+(task 2.2)`.
 
 ## TL;DR
 
 Building an autonomous orchestrator that drives `claude -p` workers through
 implementation plans, evolving from sequential single-task ticks to a
 parallel, dependency-aware SDLC. **Phase 0 + Phase 1 fully shipped; Phase 2
-just kicked off with Task 2.1 (Stop hook strip).** Next step is either
-Task 2.2 (`review-pr.sh`) or Task 2.3.A (`launch-worker.sh` extract) —
-they're independent and both safe.
+Tasks 2.1 and 2.2 done.** Next step is Task 2.3.A (`launch-worker.sh`
+extract) — pure refactor of `orchestrator.sh`, no behavior change. After
+2.3.A the rest of the dispatcher sub-plan (B-G) sequences off it.
 
 ## Phase status
 
@@ -20,8 +20,8 @@ they're independent and both safe.
 | 0 | Preconditions: `check-preconditions.sh`, `setup-labels.sh`, `PLAN-SMOKE.md` fixture | Done |
 | 1 | Plan format + ingest + Issues: `PLAN-FORMAT.md`, rewritten `ingest-plan.sh`, `create-issues.sh`, `refresh-deps.sh` | Done, end-to-end verified |
 | 2 prep | Test-target public + CI workflow + branch protection | Done |
-| 2.1 | Strip Stop hook to smoke check | **Done (this commit)** |
-| 2.2 | `review-pr.sh` (PR-comment reviewer with hardcoded `--disallowed-tools`) | Not started |
+| 2.1 | Strip Stop hook to smoke check | Done |
+| 2.2 | `review-pr.sh` (PR-comment reviewer with hardcoded `--disallowed-tools`) | **Done (this commit)** |
 | 2.3 | `orchestrator.sh` dispatcher rewrite (7 sub-tasks A-G in `DISPATCHER-PLAN.md`) | Not started |
 | 2.4 | Iteration cap (folded into 2.3.D) | Not started |
 | 3 | Optional auto-recommended + reviewer hard-blocks | Not started |
@@ -60,18 +60,22 @@ state — re-running the cycle is safe.
 
 ## Next concrete step
 
-Two equally good options, both small:
+**Task 2.3.A — extract `launch-worker.sh`:** Pure refactor of the
+existing `orchestrator.sh` per-task body into a standalone script. No
+behavior change yet. First step of the dispatcher sub-plan in
+[`DISPATCHER-PLAN.md`](DISPATCHER-PLAN.md); B-G sequence after it.
 
-**Option A — Task 2.2 (`review-pr.sh`):** Write the PR-comment reviewer.
-Hardcoded `--disallowed-tools` list per `SDLC-EVOLUTION-PLAN.md` Task 2.2.
-Standalone — works against any open PR. Unblocks Task 2.3.C/D.
+**End-to-end smoke for Task 2.2 is still pending operator action:** the
+script is wired but un-exercised. Spin up a sacrificial PR on
+`claudecode-test-target` (`gh pr create` from a branch named
+`claude/plan-01-task-1` with a small diff) and run
+`.claude/scripts/review-pr.sh <PR#>` to confirm:
 
-**Option B — Task 2.3.A (extract `launch-worker.sh`):** Pure refactor of
-the existing `orchestrator.sh` per-task body into a standalone script.
-No behavior change. First step of the dispatcher sub-plan.
-
-Either can ship in ~30 minutes of focused work. They're independent and
-neither blocks the other.
+- review posted with correct event (approve vs request-changes)
+- inline comments anchored to file+line
+- PR body gains `<!-- orch:review-iter:1 -->` + `<!-- orch:review-iter-sha:... -->`
+- `claude -p` JSON has no `Edit`/`Write`/denied-Bash tool calls (verify
+  the deny-list is honoured)
 
 ## Open decisions / deferred items
 
@@ -125,6 +129,7 @@ neither blocks the other.
     │   │   ├── ingest-plan.sh                          (Phase 1 rewrite)
     │   │   ├── create-issues.sh                        (Phase 1)
     │   │   ├── refresh-deps.sh                         (Phase 1)
+    │   │   ├── review-pr.sh                            (Task 2.2 — just added)
     │   │   ├── check-preconditions.sh                  (Phase 0)
     │   │   ├── setup-labels.sh                         (Phase 0)
     │   │   └── notify.sh                               (pre-existing)
@@ -153,6 +158,8 @@ neither blocks the other.
 
 ## Recent commits (latest first)
 
+- `97f7283` feat(phase-2): strip Stop hook to smoke check (task 2.1)
+- `6c0ea17` docs: session handoff snapshot for context continuity
 - `95a3f13` docs: dispatcher sub-plan for Phase 2 Task 2.3
 - `d592a7c` feat(phase-1): create-issues + refresh-deps scripts (tasks 1.3, 1.4)
 - `5c554c2` feat(phase-1): plan format spec + new ingest schema (tasks 1.1, 1.2)
