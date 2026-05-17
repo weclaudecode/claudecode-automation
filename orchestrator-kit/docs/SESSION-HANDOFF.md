@@ -1,17 +1,19 @@
 # Session handoff — implementation status
 
 Read this first in any new session. Snapshot of where the SDLC-evolution
-work stands as of `main` after commit `feat(phase-2): review-pr.sh
-(task 2.2)`.
+work stands as of `main` after commit `refactor(phase-2): extract
+launch-worker.sh (task 2.3.A)`.
 
 ## TL;DR
 
 Building an autonomous orchestrator that drives `claude -p` workers through
 implementation plans, evolving from sequential single-task ticks to a
 parallel, dependency-aware SDLC. **Phase 0 + Phase 1 fully shipped; Phase 2
-Tasks 2.1 and 2.2 done.** Next step is Task 2.3.A (`launch-worker.sh`
-extract) — pure refactor of `orchestrator.sh`, no behavior change. After
-2.3.A the rest of the dispatcher sub-plan (B-G) sequences off it.
+Tasks 2.1, 2.2, and 2.3.A done.** Next step is **Task 2.3.B**
+(`sweep-merges.sh`) — new script that walks tasks with a recorded `.pr`,
+checks each PR's merge state, and transitions `tasks.N.status` accordingly.
+First step that consumes the v2 state schema directly; once 2.3.B-F land,
+the orchestrator finally bridges v1 → v2.
 
 ## Phase status
 
@@ -21,8 +23,9 @@ extract) — pure refactor of `orchestrator.sh`, no behavior change. After
 | 1 | Plan format + ingest + Issues: `PLAN-FORMAT.md`, rewritten `ingest-plan.sh`, `create-issues.sh`, `refresh-deps.sh` | Done, end-to-end verified |
 | 2 prep | Test-target public + CI workflow + branch protection | Done |
 | 2.1 | Strip Stop hook to smoke check | Done |
-| 2.2 | `review-pr.sh` (PR-comment reviewer with hardcoded `--disallowed-tools`) | **Done (this commit)** |
-| 2.3 | `orchestrator.sh` dispatcher rewrite (7 sub-tasks A-G in `DISPATCHER-PLAN.md`) | Not started |
+| 2.2 | `review-pr.sh` (PR-comment reviewer with hardcoded `--disallowed-tools`) | Done + smoke-verified |
+| 2.3.A | Extract `launch-worker.sh` from `orchestrator.sh` (pure refactor) | **Done (this commit)** |
+| 2.3.B-G | Remaining dispatcher sub-plan (sweep / review-pass / iterate / launch refactor / wire / harden) | Not started |
 | 2.4 | Iteration cap (folded into 2.3.D) | Not started |
 | 3 | Optional auto-recommended + reviewer hard-blocks | Not started |
 | 4 | Parallel scheduler (raises `MAX_PARALLEL`) | Not started |
@@ -60,22 +63,32 @@ state — re-running the cycle is safe.
 
 ## Next concrete step
 
-**Task 2.3.A — extract `launch-worker.sh`:** Pure refactor of the
-existing `orchestrator.sh` per-task body into a standalone script. No
-behavior change yet. First step of the dispatcher sub-plan in
-[`DISPATCHER-PLAN.md`](DISPATCHER-PLAN.md); B-G sequence after it.
+**Task 2.3.B — `sweep-merges.sh`:** New script. For each task in
+`state.tasks.*` with a recorded `.pr`, query `gh pr view <pr> --json
+state` and transition `tasks.N.status` per the table in
+[`DISPATCHER-PLAN.md`](DISPATCHER-PLAN.md) sub-task B (MERGED → merged +
+close issue; CLOSED → blocked + notify + label). State writes are atomic
+via temp+mv. This is the **first script that reads the v2 state schema**
+(`tasks.N.status`) directly rather than the v1 fields — once it lands,
+sub-tasks 2.3.E (launch-pass) and 2.3.F (wire tick) will complete the
+v1 → v2 cutover.
 
-**End-to-end smoke for Task 2.2 is still pending operator action:** the
-script is wired but un-exercised. Spin up a sacrificial PR on
-`claudecode-test-target` (`gh pr create` from a branch named
-`claude/plan-01-task-1` with a small diff) and run
-`.claude/scripts/review-pr.sh <PR#>` to confirm:
+**Open: end-to-end smoke for Task 2.3.A.** Can't be exercised against
+the test-target PLAN-SMOKE state.json (it's v2 schema, but the
+extracted `launch-worker.sh` still reads v1 like the original) — byte
+equivalence to the pre-extract per-task body is the verification for
+the refactor. Real runtime test deferred until 2.3.F's tick wiring
+lands.
 
-- review posted with correct event (approve vs request-changes)
-- inline comments anchored to file+line
-- PR body gains `<!-- orch:review-iter:1 -->` + `<!-- orch:review-iter-sha:... -->`
-- `claude -p` JSON has no `Edit`/`Write`/denied-Bash tool calls (verify
-  the deny-list is honoured)
+**Smoke for Task 2.2 was verified** in the previous step:
+- Reviewer LLM call returned valid `{pass, summary, findings}` JSON
+- Zero tool calls on a small diff (deny-list trivially honored)
+- `gh api ... pulls/.../reviews` POST path works (manually exercised
+  with `event=COMMENT` since GitHub blocks self-approve)
+- PR body iter-marker update works
+- A latent bug was caught: `claude -p --output-format json` returns a
+  JSON **array** of message objects, not a single object — fixed in
+  commit `f8b0836`.
 
 ## Open decisions / deferred items
 
@@ -129,7 +142,8 @@ script is wired but un-exercised. Spin up a sacrificial PR on
     │   │   ├── ingest-plan.sh                          (Phase 1 rewrite)
     │   │   ├── create-issues.sh                        (Phase 1)
     │   │   ├── refresh-deps.sh                         (Phase 1)
-    │   │   ├── review-pr.sh                            (Task 2.2 — just added)
+    │   │   ├── review-pr.sh                            (Task 2.2)
+    │   │   ├── launch-worker.sh                        (Task 2.3.A — just added)
     │   │   ├── check-preconditions.sh                  (Phase 0)
     │   │   ├── setup-labels.sh                         (Phase 0)
     │   │   └── notify.sh                               (pre-existing)
@@ -158,6 +172,8 @@ script is wired but un-exercised. Spin up a sacrificial PR on
 
 ## Recent commits (latest first)
 
+- `f8b0836` fix(phase-2): parse claude -p result entry from array form
+- `feb6323` feat(phase-2): review-pr.sh (task 2.2)
 - `97f7283` feat(phase-2): strip Stop hook to smoke check (task 2.1)
 - `6c0ea17` docs: session handoff snapshot for context continuity
 - `95a3f13` docs: dispatcher sub-plan for Phase 2 Task 2.3
