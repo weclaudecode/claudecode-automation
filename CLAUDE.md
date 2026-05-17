@@ -16,16 +16,17 @@ instructions in `orchestrator-kit/README.md` against a separate test repo.
 
 ## Source-of-truth layout (read this before editing)
 
-Two parallel copies of the same toolkit live here:
-
-| Path | Status |
-|---|---|
-| `orchestrator-kit/` | **Canonical, current.** All fixes from `orchestrator-kit/docs/FIX-PLAN.md` land here. |
-| `./orchestrator.sh`, `./ingest-plan.sh`, `./stop-pre-push-review.sh`, `./worker-superpower.md`, `./README.md` | Earlier drafts. Missing pending-PR gate, PID-aware locking, log rotation, fence-aware task parsing, `gawk` enforcement, and `pending_pr` state field. |
-
-**When editing scripts or prompts, edit the version under `orchestrator-kit/` and treat the root-level loose files as historical** unless the user explicitly asks to sync them. Before changing the root copies, ask whether they should be deleted or kept as a snapshot.
+The canonical kit lives under `orchestrator-kit/`. Earlier drafts of the
+same scripts have been archived to `orchestrator-kit/docs/archive/` for
+historical reference — do not edit them; treat them as a frozen snapshot
+of the pre-fix-plan state. Use `git log --follow orchestrator-kit/docs/archive/<file>`
+to walk back through pre-archive history.
 
 `orchestrator-kit/CLAUDE.md` is a **template that the installer copies into the target repo**. It describes a downstream stack (Python/TS/AWS/Bedrock) that does not apply to this repo. Don't read it as guidance for work here.
+
+## Test target repo
+
+End-to-end testing of the orchestrator happens against a separate sacrificial repo: `weclaudecode/claudecode-test-target` (cloned locally at `/Users/rb/Documents/Github/claudecode-test-target`). That repo's README lists a backlog of task ideas; the test plans we author against it live in its `.claude/plans/` once the kit is installed into it.
 
 ## Common commands
 
