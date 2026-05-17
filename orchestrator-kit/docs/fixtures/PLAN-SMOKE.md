@@ -1,52 +1,68 @@
 # PLAN-SMOKE — exercises scheduler edge cases
 
-Smoke-test fixture for the Phase 1 ingest and Phase 4 scheduler.
+Smoke-test fixture targeting `weclaudecode/claudecode-test-target`
+(a minimal Python `todoapp` library). The task `touches:` paths point
+at that repo's actual structure.
 
-Covers:
-- Task with no deps (1)
-- Single-dep chain (2 depends on 1)
-- Parallel-safe pair (2 and 3 both depend on 1; touches are disjoint)
-- Sensitive-flagged task that must NOT auto-merge (4)
+Scheduler scenarios covered:
+- No-dep tasks: 1, 2, 4 (any can launch first)
+- Dependency chain: 3 → 1 (3 must wait for 1 to merge)
+- Parallel-safe pair: 1 + 2 (disjoint files, both can run concurrently)
+- File collision: 2 + 3 (same file → must serialize even though their
+  deps don't force it)
+- Sensitive flag: 4 (touches `infra/` → `auto_merge_overrides[4] = false`)
 
-Expected ingest behavior (validates after Phase 1 ships):
-- 4 GitHub issues created
-- Task 1 carries `orch:deps-met` (no deps)
-- Tasks 2 and 3 do NOT carry `orch:deps-met` (waiting on 1)
-- Task 4 carries `orch:needs-robbie` + `auto_merge_overrides[4] = false`
+Expected ingest behavior (validates after Phase 1.2 ships):
+- state.json `tasks` object has entries for 1-4 with correct
+  `depends_on`, `touches`, `status: "pending"`
+- `auto_merge_overrides` is `{"4": false}`
 
 Expected scheduler behavior (validates after Phase 4 ships, MAX_PARALLEL=2):
-- Tick 1: launches task 1 only (no other ready tasks)
-- After task 1 merges: tasks 2 and 3 both become `orch:deps-met`
-- Tick 2: launches tasks 2 and 3 in parallel (disjoint `touches:`)
-- Task 4 is always ready (deps-met from start) but goes through manual
-  review path due to needs-robbie flag
+- Tick 1: launches 1 + 2 (both deps-met, disjoint touches)
+- Task 3 cannot launch (deps-blocked on 1)
+- Task 4 doesn't launch automatically (needs-robbie → manual review)
+- After 1 merges: 3 becomes deps-met but blocked by collision with
+  task-2 branch
+- After 2 merges: 3 launches
 
 ---
 
-## Task 1: Add util module
+## Task 1: Add format_for_display utility
 **depends_on:** []
-**touches:** [`src/utils/format.ts`]
+**touches:** [`src/todoapp/format.py`]
 
-Add a `formatBytes(n: number)` helper that returns a human-readable
-size string. Commit message: `feat: add formatBytes util`.
+Add a new module `src/todoapp/format.py` containing one function
+`format_for_display(todo: Todo) -> str` returning `"[ ] title"` or
+`"[x] title"` depending on `todo.done`.
 
-## Task 2: Use util in component A
+Commit: `feat: add format_for_display util`.
+
+## Task 2: Add complete_todo function
+**depends_on:** []
+**touches:** [`src/todoapp/core.py`]
+
+In `src/todoapp/core.py`, add `complete_todo(id: int) -> Todo` that
+marks the matching todo as done and returns it. Raises `KeyError`
+if no todo has that id.
+
+Commit: `feat: add complete_todo`.
+
+## Task 3: Add list_todos using format util
 **depends_on:** [1]
-**touches:** [`src/components/A.tsx`]
+**touches:** [`src/todoapp/core.py`]
 
-Import formatBytes from `src/utils/format.ts`; render the result
-inside component A. Commit message: `feat: use formatBytes in A`.
+In `src/todoapp/core.py`, add `list_todos(status: str | None = None)
+-> list[str]` returning a list of `format_for_display(t)` strings for
+matching todos. Imports `format_for_display` from task 1.
 
-## Task 3: Use util in component B
-**depends_on:** [1]
-**touches:** [`src/components/B.tsx`]
+Commit: `feat: add list_todos`.
 
-Import formatBytes from `src/utils/format.ts`; render the result
-inside component B. Commit message: `feat: use formatBytes in B`.
-
-## Task 4: Add IAM role (must NOT auto-merge)
+## Task 4: Add IAM role for future Lambda deploy
 **depends_on:** []
 **touches:** [`infra/iam.tf`]
 
-Add `aws_iam_role.formatter_writer` with a minimal trust policy.
-Commit message: `feat(infra): add formatter_writer IAM role`.
+Add `aws_iam_role.todoapp_lambda_writer` to `infra/iam.tf` with a
+minimal trust policy for the AWS Lambda service. Sensitive-flagged by
+the ingest pattern detector (touches `infra/` and contains `iam_role`).
+
+Commit: `feat(infra): add todoapp_lambda_writer IAM role`.
