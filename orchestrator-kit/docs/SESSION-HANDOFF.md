@@ -1,20 +1,21 @@
 # Session handoff — implementation status
 
 Read this first in any new session. Snapshot of where the SDLC-evolution
-work stands as of `main` after commit `feat(phase-2): 5-phase tick +
-v2 launch-worker (task 2.3.F)`.
+work stands as of `main` after commit `feat(phase-2): review-pass.sh
+(task 2.3.C)`.
 
 ## TL;DR
 
 Building an autonomous orchestrator that drives `claude -p` workers through
 implementation plans, evolving from sequential single-task ticks to a
 parallel, dependency-aware SDLC. **Phase 0 + Phase 1 + Phase 2 Tasks 2.1,
-2.2, 2.3.A, 2.3.B, 2.3.E, and 2.3.F are done — the orchestrator now
-runs end-to-end against the v2 schema.** Verified with two real ticks
-against `claudecode-test-target` (PRs #7 and #8 merged, total cost
-~$0.95). Next step is **Task 2.3.C** (`review-pass.sh`) — orchestrator
-phase that walks open PRs and re-invokes `review-pr.sh` (Task 2.2) when
-HEAD SHA differs from the last reviewed marker.
+2.2, 2.3.A, 2.3.B, 2.3.E, 2.3.F, and 2.3.C are done.** The dispatcher
+now runs all 5 phases end-to-end against the v2 schema — including
+automatic re-review of open PRs whose HEAD SHA has advanced past the
+last review marker. Next step is **Task 2.3.D** (`iterate-pass.sh`) —
+walks PRs labeled `orch:review-blocked`, re-spawns a worker in the PR's
+branch to address reviewer comments. After D ships, the dispatcher
+closes the loop: review → request-changes → iterate → re-review → merge.
 
 ## Phase status
 
@@ -28,8 +29,9 @@ HEAD SHA differs from the last reviewed marker.
 | 2.3.A | Extract `launch-worker.sh` from `orchestrator.sh` (pure refactor) | Done |
 | 2.3.B | `sweep-merges.sh` (v2-aware pending-merge sweep) | Done + smoke-verified |
 | 2.3.E | `find-ready-tasks.sh` + `launch-pass.sh` (MAX_PARALLEL-bounded launch) | Done + smoke-verified |
-| 2.3.F | 5-phase tick + v2 launch-worker | **Done + real e2e (this commit)** |
-| 2.3.C-D | review-pass / iterate (sequence after 2.3.F) | Not started |
+| 2.3.F | 5-phase tick + v2 launch-worker | Done + real e2e |
+| 2.3.C | `review-pass.sh` (HEAD-SHA-aware reviewer dispatch) | **Done + smoke-verified (this commit)** |
+| 2.3.D | `iterate-pass.sh` (worker re-spawn on review-blocked PRs) | Not started |
 | 2.3.G | Concurrency + safety hardening (flock, worker timeout, EXIT trap cleanup) | Not started |
 | 2.4 | Iteration cap (folded into 2.3.D) | Not started |
 | 3 | Optional auto-recommended + reviewer hard-blocks | Not started |
@@ -68,19 +70,24 @@ state — re-running the cycle is safe.
 
 ## Next concrete step
 
-**Task 2.3.C — `review-pass.sh`:** New dispatcher phase script that
-walks tasks with `status == "in_review"`, reads each PR's HEAD SHA,
-compares against the `<!-- orch:review-iter-sha:... -->` marker that
-`review-pr.sh` (Task 2.2) writes into PR bodies, and re-invokes
-`review-pr.sh` when SHAs differ (new commits since last review).
-Multiple reviewers run in parallel up to `MAX_PARALLEL_REVIEWS`
-(default = MAX_PARALLEL). After 2.3.C, the dispatcher will
-automatically code-review every orchestrator PR, not just write one.
+**Task 2.3.D — `iterate-pass.sh`:** Walks tasks with `status =
+"in_review"` whose PR carries the label `orch:review-blocked` (set by
+`review-pr.sh` when reviewer found blockers). For each:
+  1. Check iteration count from `<!-- orch:review-iter:N -->`. If
+     `N >= ORCH_REVIEW_MAX_ITERS` (default 3), set `tasks.N.status =
+     "blocked"`, add `orch:safety-block` label, notify, and stop.
+  2. Re-create worktree from the PR's branch (not `origin/main`).
+  3. Spawn `claude -p` with an iteration prompt: read the reviewer's
+     change-request comments via `gh pr review list` + `gh api .../comments`,
+     address them, commit, push.
+  4. Cleanup worktree after worker returns. Next tick's review-pass
+     will re-review the new commits via the SHA-comparison logic
+     just shipped in 2.3.C.
 
-After 2.3.C comes 2.3.D (`iterate-pass.sh` — re-spawn a worker on PRs
-labeled `orch:review-blocked` to address review comments) and 2.3.G
-(hardening — flock around state writes, worker timeouts, EXIT trap
-cleanup of worktrees).
+After 2.3.D the dispatcher closes the loop: review → request-changes →
+iterate → re-review → merge. Then **Task 2.3.G** is the safety floor
+(flock around state writes, worker timeouts, EXIT-trap cleanup of
+worktrees) — required before MAX_PARALLEL > 1 is safe.
 
 **Recent smoke results (all on test-target):**
 
@@ -104,6 +111,16 @@ cleanup of worktrees).
   completed in 3.0s real time at MAX_PARALLEL=2; 1 stub in 2.5s at
   MAX_PARALLEL=1. **Don't raise MAX_PARALLEL > 1 until 2.3.G ships
   atomic state writes via flock.**
+- **Task 2.3.C** (review-pass.sh): all four orchestration scenarios
+  verified against test-target (PR #9 sacrificial, stub reviewer via
+  `ORCH_REVIEW_PR` env var):
+    1. No `orch:review-sha` marker → reviewer spawned (launched=1)
+    2. Marker matches HEAD → skip (skipped=1)
+    3. Marker stale → reviewer spawned (launched=1)
+    4. PR closed → skip with "sweep-merges owns this" note (not_open=1)
+  Renamed `orch:review-iter-sha:<sha>` → `orch:review-sha:<sha>` in
+  review-pr.sh to match spec naming. Safe rename: no PR carried the
+  old marker yet.
 - **Task 2.3.F** (5-phase tick): real end-to-end against test-target.
   Tick 1 launched task 1 → PR #7 → auto-merged. Tick 2 swept the
   merge (`tasks.1.status = merged`, issue #1 closed), refresh-deps
@@ -178,8 +195,9 @@ cleanup of worktrees).
     │   │   ├── review-pr.sh                            (Task 2.2)
     │   │   ├── launch-worker.sh                        (Task 2.3.A)
     │   │   ├── sweep-merges.sh                         (Task 2.3.B)
-    │   │   ├── find-ready-tasks.sh                     (Task 2.3.E — just added; interim)
-    │   │   ├── launch-pass.sh                          (Task 2.3.E — just added)
+    │   │   ├── find-ready-tasks.sh                     (Task 2.3.E; interim)
+    │   │   ├── launch-pass.sh                          (Task 2.3.E)
+    │   │   ├── review-pass.sh                          (Task 2.3.C — just added)
     │   │   ├── check-preconditions.sh                  (Phase 0)
     │   │   ├── setup-labels.sh                         (Phase 0)
     │   │   └── notify.sh                               (pre-existing)
@@ -209,6 +227,7 @@ cleanup of worktrees).
 ## Recent commits (latest first)
 
 - `35eac02` feat(phase-2): sweep-merges.sh (task 2.3.B)
+- `223479a` feat(phase-2): 5-phase tick + v2 launch-worker (task 2.3.F)
 - `96f342b` feat(phase-2): find-ready-tasks + launch-pass (task 2.3.E)
 - `35eac02` feat(phase-2): sweep-merges.sh (task 2.3.B)
 - `0b2c1e5` refactor(phase-2): extract launch-worker.sh (task 2.3.A)

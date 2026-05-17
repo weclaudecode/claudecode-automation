@@ -30,7 +30,7 @@
 #
 # Iteration tracking (read by dispatcher Task 2.3):
 #   <!-- orch:review-iter:N -->
-#   <!-- orch:review-iter-sha:<headOid> -->
+#   <!-- orch:review-sha:<headOid> -->
 #
 # Exit codes:
 #   0  review posted (approve OR request-changes)
@@ -329,13 +329,13 @@ fi
 # Strip prior markers, append new ones. Idempotent on rerun.
 CLEAN_BODY=$(printf '%s\n' "$PR_BODY" \
   | sed -E '/<!-- orch:review-iter:[0-9]+ -->/d' \
-  | sed -E '/<!-- orch:review-iter-sha:[a-f0-9]+ -->/d')
+  | sed -E '/<!-- orch:review-sha:[a-f0-9]+ -->/d')
 
 NEW_PR_BODY=$(cat <<EOF
 $CLEAN_BODY
 
 <!-- orch:review-iter:$NEW_ITER -->
-<!-- orch:review-iter-sha:$HEAD_OID -->
+<!-- orch:review-sha:$HEAD_OID -->
 EOF
 )
 
