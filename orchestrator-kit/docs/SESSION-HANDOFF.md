@@ -1,20 +1,20 @@
 # Session handoff — implementation status
 
 Read this first in any new session. Snapshot of where the SDLC-evolution
-work stands as of `main` after commit `feat(phase-2): find-ready-tasks +
-launch-pass (task 2.3.E)`.
+work stands as of `main` after commit `feat(phase-2): 5-phase tick +
+v2 launch-worker (task 2.3.F)`.
 
 ## TL;DR
 
 Building an autonomous orchestrator that drives `claude -p` workers through
 implementation plans, evolving from sequential single-task ticks to a
-parallel, dependency-aware SDLC. **Phase 0 + Phase 1 fully shipped; Phase 2
-Tasks 2.1, 2.2, 2.3.A, 2.3.B, and 2.3.E done.** Next step is **Task 2.3.F**
-(wire tick) — replace `orchestrator.sh`'s body with the 5-phase sequence
-(refresh-deps → sweep-merges → review-pass guard → iterate-pass guard →
-launch-pass → plan-completion check). This is the v1 → v2 cutover for
-the orchestrator entry point. Phases 2.3.C/D (review-pass + iterate-pass)
-remain optional via `[ -x ... ]` guards in the tick body.
+parallel, dependency-aware SDLC. **Phase 0 + Phase 1 + Phase 2 Tasks 2.1,
+2.2, 2.3.A, 2.3.B, 2.3.E, and 2.3.F are done — the orchestrator now
+runs end-to-end against the v2 schema.** Verified with two real ticks
+against `claudecode-test-target` (PRs #7 and #8 merged, total cost
+~$0.95). Next step is **Task 2.3.C** (`review-pass.sh`) — orchestrator
+phase that walks open PRs and re-invokes `review-pr.sh` (Task 2.2) when
+HEAD SHA differs from the last reviewed marker.
 
 ## Phase status
 
@@ -27,9 +27,10 @@ remain optional via `[ -x ... ]` guards in the tick body.
 | 2.2 | `review-pr.sh` (PR-comment reviewer with hardcoded `--disallowed-tools`) | Done + smoke-verified |
 | 2.3.A | Extract `launch-worker.sh` from `orchestrator.sh` (pure refactor) | Done |
 | 2.3.B | `sweep-merges.sh` (v2-aware pending-merge sweep) | Done + smoke-verified |
-| 2.3.E | `find-ready-tasks.sh` + `launch-pass.sh` (MAX_PARALLEL-bounded launch) | **Done + smoke-verified (this commit)** |
-| 2.3.C-D | review-pass / iterate (depend on 2.3.F) | Not started |
-| 2.3.F-G | Wire tick / hardening | Not started |
+| 2.3.E | `find-ready-tasks.sh` + `launch-pass.sh` (MAX_PARALLEL-bounded launch) | Done + smoke-verified |
+| 2.3.F | 5-phase tick + v2 launch-worker | **Done + real e2e (this commit)** |
+| 2.3.C-D | review-pass / iterate (sequence after 2.3.F) | Not started |
+| 2.3.G | Concurrency + safety hardening (flock, worker timeout, EXIT trap cleanup) | Not started |
 | 2.4 | Iteration cap (folded into 2.3.D) | Not started |
 | 3 | Optional auto-recommended + reviewer hard-blocks | Not started |
 | 4 | Parallel scheduler (raises `MAX_PARALLEL`) | Not started |
@@ -67,22 +68,19 @@ state — re-running the cycle is safe.
 
 ## Next concrete step
 
-**Task 2.3.F — wire tick:** Rewrite `orchestrator.sh`'s body from "v1
-single-task launch" to the 5-phase sequence per DISPATCHER-PLAN. Body
-becomes ~30 lines: acquire lock, find oldest in_progress state file,
-then sequentially call `refresh-deps.sh` → `sweep-merges.sh` →
-`[ -x review-pass.sh ] && review-pass.sh` → `[ -x iterate-pass.sh ] &&
-iterate-pass.sh` → `launch-pass.sh "$STATE_FILE" "$REPO" "$MAX_PARALLEL"`
-→ plan-completion check (all `tasks.*.status` are `merged` or
-`blocked` → archive). This is the v1→v2 cutover for orchestrator.sh
-itself.
+**Task 2.3.C — `review-pass.sh`:** New dispatcher phase script that
+walks tasks with `status == "in_review"`, reads each PR's HEAD SHA,
+compares against the `<!-- orch:review-iter-sha:... -->` marker that
+`review-pr.sh` (Task 2.2) writes into PR bodies, and re-invokes
+`review-pr.sh` when SHAs differ (new commits since last review).
+Multiple reviewers run in parallel up to `MAX_PARALLEL_REVIEWS`
+(default = MAX_PARALLEL). After 2.3.C, the dispatcher will
+automatically code-review every orchestrator PR, not just write one.
 
-**Caveat for 2.3.F:** `launch-worker.sh` still writes v1 fields
-(`current_task`, `retries_for_current`, `pending_pr`). Either (a)
-update launch-worker.sh as part of 2.3.F to write v2 (`tasks.N.status
-= "in_review"`, `tasks.N.pr = N`, `tasks.N.retries`), or (b) write a
-v1→v2 reconciler that runs at the top of every tick. Option (a) is
-cleaner.
+After 2.3.C comes 2.3.D (`iterate-pass.sh` — re-spawn a worker on PRs
+labeled `orch:review-blocked` to address review comments) and 2.3.G
+(hardening — flock around state writes, worker timeouts, EXIT trap
+cleanup of worktrees).
 
 **Recent smoke results (all on test-target):**
 
@@ -106,6 +104,24 @@ cleaner.
   completed in 3.0s real time at MAX_PARALLEL=2; 1 stub in 2.5s at
   MAX_PARALLEL=1. **Don't raise MAX_PARALLEL > 1 until 2.3.G ships
   atomic state writes via flock.**
+- **Task 2.3.F** (5-phase tick): real end-to-end against test-target.
+  Tick 1 launched task 1 → PR #7 → auto-merged. Tick 2 swept the
+  merge (`tasks.1.status = merged`, issue #1 closed), refresh-deps
+  unblocked task 3, launch-pass picked task 2 → PR #8 → also
+  auto-merged. Total cost ~$0.95 across 2 worker runs. Two real bugs
+  caught in launch-worker.sh and fixed in the same commit:
+    1. `STATE_FILE` was a relative path → `cd "$WT"` broke subsequent
+       jq reads/writes. Now resolved to absolute via `case` on `/`.
+    2. `--permission-mode acceptEdits` blocked the worker's
+       `git add`/`git commit` Bash calls (V1 bug that surfaced only
+       on real e2e). Switched to `--permission-mode bypassPermissions`,
+       which is the correct unattended-worker setting.
+  Test-target restored to post-ingest state after the smoke (all
+  4 issues reopened, all tasks pending, transient kit files removed).
+  Caveat: test-target main now contains PR #7 (format_for_display)
+  and PR #8 (complete_todo) merges. Future smokes that re-run PLAN-01
+  on this main will hit "no commits between" — operator needs a new
+  fixture, or revert the merges before re-running.
 
 ## Open decisions / deferred items
 
@@ -192,6 +208,8 @@ cleaner.
 
 ## Recent commits (latest first)
 
+- `35eac02` feat(phase-2): sweep-merges.sh (task 2.3.B)
+- `96f342b` feat(phase-2): find-ready-tasks + launch-pass (task 2.3.E)
 - `35eac02` feat(phase-2): sweep-merges.sh (task 2.3.B)
 - `0b2c1e5` refactor(phase-2): extract launch-worker.sh (task 2.3.A)
 - `f8b0836` fix(phase-2): parse claude -p result entry from array form
