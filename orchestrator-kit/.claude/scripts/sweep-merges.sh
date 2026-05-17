@@ -54,6 +54,9 @@ jq -e '.tasks | type == "object"' "$STATE_FILE" >/dev/null 2>&1 || {
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
 NOTIFY="$REPO_ROOT/.claude/scripts/notify.sh"
 
+# shellcheck source=_dispatcher_lib.sh
+source "$REPO_ROOT/.claude/scripts/_dispatcher_lib.sh"
+
 # Build sweep list: task_num pr_num issue_num (issue may be "null")
 SWEEP_LIST=$(jq -r '
   .tasks | to_entries[]
@@ -74,18 +77,16 @@ BLOCKED_COUNT=0
 OPEN_COUNT=0
 ERROR_COUNT=0
 
-# Atomic per-task state update helper.
+# Atomic per-task state update helper — delegates to lib (mkdir-based
+# lock makes this safe with concurrent writers).
 update_state() {
   local task_num="$1"
   local jq_expr="$2"
-  if jq --arg t "$task_num" "$jq_expr" "$STATE_FILE" > "$STATE_FILE.tmp"; then
-    mv "$STATE_FILE.tmp" "$STATE_FILE"
+  if state_write "$STATE_FILE" "$jq_expr" --arg t "$task_num"; then
     return 0
-  else
-    rm -f "$STATE_FILE.tmp"
-    echo "sweep-merges: jq failed updating task $task_num" >&2
-    return 1
   fi
+  echo "sweep-merges: state_write failed updating task $task_num (jq or lock)" >&2
+  return 1
 }
 
 while read -r task_num pr_num issue_num; do

@@ -48,6 +48,9 @@ TASK_NUM="$2"
 REPO=$(git rev-parse --show-toplevel) || { echo "launch-worker: not inside a git work tree" >&2; exit 1; }
 cd "$REPO" || { echo "launch-worker: cd to repo root failed" >&2; exit 1; }
 
+# shellcheck source=_dispatcher_lib.sh
+source "$REPO/.claude/scripts/_dispatcher_lib.sh"
+
 # Resolve state file to absolute path. The script `cd`s into the worktree
 # mid-run; relative paths break subsequent jq reads/writes.
 case "$RAW_STATE_FILE" in
@@ -72,15 +75,14 @@ PLAN_NUM=$(echo "$PLAN_BASE" | grep -oE 'PLAN-[0-9]+' | grep -oE '[0-9]+' || ech
 AUTO_MERGE=$(jq -r --arg t "$TASK_NUM" '.auto_merge_overrides[$t] // true' "$STATE_FILE")
 echo "launch-worker: task=$TASK_NUM/$TOTAL retries=$RETRIES auto-merge=$AUTO_MERGE"
 
-# Atomic state write helper.
+# Atomic state write helper — delegates to lib (mkdir-based lock makes
+# this safe with MAX_PARALLEL > 1).
 update_state() {
   local jq_expr="$1"
-  if jq --arg t "$TASK_NUM" "$jq_expr" "$STATE_FILE" > "$STATE_FILE.tmp"; then
-    mv "$STATE_FILE.tmp" "$STATE_FILE"
+  if state_write "$STATE_FILE" "$jq_expr" --arg t "$TASK_NUM"; then
     return 0
   fi
-  rm -f "$STATE_FILE.tmp"
-  echo "launch-worker: jq update failed for task $TASK_NUM" >&2
+  echo "launch-worker: state_write failed for task $TASK_NUM (jq or lock)" >&2
   return 1
 }
 
@@ -95,7 +97,15 @@ git worktree add -B "$BRANCH" "$WT" origin/main 2>/dev/null \
   || git worktree add -B "$BRANCH" "$WT" main \
   || { echo "worktree add failed for $BRANCH at $WT"; exit 1; }
 
-cd "$WT" || { echo "cd to worktree $WT failed"; exit 1; }
+# Register before any work begins. Every graceful exit path below must
+# unregister; signal-induced exits skip it so the orchestrator trap cleans.
+register_worktree "$WT"
+
+cd "$WT" || {
+  echo "cd to worktree $WT failed"
+  unregister_worktree "$WT"
+  exit 1
+}
 
 WORKER_PROMPT_FILE="$REPO/.claude/prompts/worker-superpower.md"
 RUN_OUT="$REPO/.claude/state/run-plan${PLAN_NUM}-t${TASK_NUM}-r${RETRIES}.json"
@@ -119,10 +129,10 @@ fi
 
 WORKER_MODEL="${ORCH_WORKER_MODEL:-sonnet}"
 MAX_TURNS="${ORCH_MAX_TURNS:-30}"
+WORKER_TIMEOUT="${ORCH_WORKER_TIMEOUT:-600}"
+TIMEOUT_CMD=$(find_timeout_cmd)
 
-echo "spawning worker (model=$WORKER_MODEL, max-turns=$MAX_TURNS)..."
-
-claude -p "$(cat "$WORKER_PROMPT_FILE")
+WORKER_FULL_PROMPT="$(cat "$WORKER_PROMPT_FILE")
 
 ## Active plan path (for cross-references only — task content is below)
 $REPO/$PLAN_FILE
@@ -135,13 +145,30 @@ end with the message specified in the task.
 
 ### Task ${TASK_NUM} (verbatim from plan)
 
-${TASK_CONTENT}" \
-  --permission-mode bypassPermissions \
-  --output-format json \
-  --model "$WORKER_MODEL" \
-  --max-turns "$MAX_TURNS" \
-  > "$RUN_OUT"
+${TASK_CONTENT}"
+
+# Build invocation as array so the timeout prefix is optional without
+# duplicating the claude command. Exit 124 from `timeout` means the worker
+# was killed — naturally treated as a non-zero WORKER_EXIT and counted as
+# a retry, same as any other failure.
+RUN_CMD=()
+if [ -n "$TIMEOUT_CMD" ]; then
+  RUN_CMD=("$TIMEOUT_CMD" "${WORKER_TIMEOUT}s")
+  echo "spawning worker (model=$WORKER_MODEL, max-turns=$MAX_TURNS, timeout=${WORKER_TIMEOUT}s)..."
+else
+  echo "spawning worker (model=$WORKER_MODEL, max-turns=$MAX_TURNS, timeout=NONE — install coreutils/gtimeout)..."
+fi
+RUN_CMD+=(claude -p "$WORKER_FULL_PROMPT"
+  --permission-mode bypassPermissions
+  --output-format json
+  --model "$WORKER_MODEL"
+  --max-turns "$MAX_TURNS")
+
+"${RUN_CMD[@]}" > "$RUN_OUT"
 WORKER_EXIT=$?
+if [ "$WORKER_EXIT" = "124" ] && [ -n "$TIMEOUT_CMD" ]; then
+  echo "worker exceeded ${WORKER_TIMEOUT}s timeout — counted as failure"
+fi
 
 cd "$REPO"
 
@@ -152,17 +179,22 @@ if [ $WORKER_EXIT -ne 0 ]; then
     update_state '.tasks[$t].status = "blocked" | .tasks[$t].retries = 3 | .tasks[$t].blocked_at = (now | todateiso8601) | .tasks[$t].blocked_reason = "worker_failed_3x"'
     bash "$NOTIFY" "plan $PLAN_NUM task $TASK_NUM blocked" \
       "Worker failed 3 times. Investigate $RUN_OUT and worktree $WT"
+    # Worktree intentionally preserved for human inspection; unregister so
+    # the orchestrator's trap does not auto-remove it.
+    unregister_worktree "$WT"
     exit 1
   else
     update_state ".tasks[\$t].retries = $NEW_RETRIES"
-    # Keep the worktree for inspection on retry
+    # Keep the worktree for inspection on retry; unregister for same reason
+    # as the hard-block path above.
+    unregister_worktree "$WT"
     exit 0
   fi
 fi
 
 echo "worker succeeded"
 
-cd "$WT" || { echo "cd to worktree $WT failed before push"; exit 1; }
+cd "$WT" || { echo "cd to worktree $WT failed before push"; unregister_worktree "$WT"; exit 1; }
 if ! git push -u origin "$BRANCH" --quiet 2> /tmp/orch-push.$$.err; then
   PUSH_ERR=$(cat /tmp/orch-push.$$.err 2>/dev/null || echo "")
   rm -f /tmp/orch-push.$$.err
@@ -171,6 +203,7 @@ if ! git push -u origin "$BRANCH" --quiet 2> /tmp/orch-push.$$.err; then
     "plan $PLAN_NUM task $TASK_NUM — auth or network. State NOT advanced; next tick will retry."
   cd "$REPO"
   # Preserve worktree and state. Operator fixes auth, next tick retries.
+  unregister_worktree "$WT"
   exit 1
 fi
 rm -f /tmp/orch-push.$$.err
@@ -202,6 +235,7 @@ PR_URL=$(gh pr create \
   --base main 2>&1) || {
     echo "gh pr create failed: $PR_URL"
     bash "$NOTIFY" "PR creation failed" "plan $PLAN_NUM task $TASK_NUM — investigate"
+    unregister_worktree "$WT"
     exit 1
   }
 
@@ -213,6 +247,7 @@ cd "$REPO"
 # Record PR + transition pending -> in_review. Both code paths land here.
 if ! update_state ".tasks[\$t].status = \"in_review\" | .tasks[\$t].pr = $PR_NUM | .tasks[\$t].retries = 0"; then
   echo "launch-worker: state update failed AFTER PR was opened — manual reconcile required" >&2
+  unregister_worktree "$WT"
   exit 1
 fi
 
@@ -232,5 +267,6 @@ else
 fi
 
 git worktree remove "$WT" --force 2>/dev/null || true
+unregister_worktree "$WT"
 
 echo "launch-worker: done (task $TASK_NUM, PR #$PR_NUM, status=in_review)"

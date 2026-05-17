@@ -65,6 +65,9 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
   exit 1
 }
 
+# shellcheck source=_dispatcher_lib.sh
+source "$REPO_ROOT/.claude/scripts/_dispatcher_lib.sh"
+
 # ---- Fetch PR metadata ----
 PR_JSON=$(gh pr view "$PR_NUM" --repo "$REPO" \
   --json number,headRefName,baseRefName,headRefOid,body,state 2>/dev/null) || {
@@ -179,12 +182,18 @@ EOF
 # ---- Spawn reviewer ----
 REVIEWER_MODEL="${ORCH_REVIEWER_MODEL:-sonnet}"
 REVIEWER_MAX_TURNS="${ORCH_REVIEWER_MAX_TURNS:-20}"
+REVIEWER_TIMEOUT="${ORCH_REVIEWER_TIMEOUT:-300}"
+TIMEOUT_CMD=$(find_timeout_cmd)
 
 # Deny-list locks the reviewer to read-only. Bash(...) globs match the
 # command form; the reviewer can still run `git log`, `gh api`, etc.
 DISALLOWED='Edit,Write,NotebookEdit,Bash(git push:*),Bash(gh pr merge:*),Bash(gh pr close:*),Bash(gh pr edit:*),Bash(gh pr review:*),Bash(rm:*)'
 
-echo "review-pr: spawning reviewer (model=$REVIEWER_MODEL, iter=$NEW_ITER, sha=${HEAD_OID:0:8})..."
+if [ -n "$TIMEOUT_CMD" ]; then
+  echo "review-pr: spawning reviewer (model=$REVIEWER_MODEL, iter=$NEW_ITER, sha=${HEAD_OID:0:8}, timeout=${REVIEWER_TIMEOUT}s)..."
+else
+  echo "review-pr: spawning reviewer (model=$REVIEWER_MODEL, iter=$NEW_ITER, sha=${HEAD_OID:0:8}, timeout=NONE — install coreutils/gtimeout)..."
+fi
 
 RUN_OUT=$(mktemp)
 trap 'rm -f "$RUN_OUT"' EXIT
@@ -192,14 +201,25 @@ trap 'rm -f "$RUN_OUT"' EXIT
 # SKIP_REVIEW=1 prevents this child claude -p from tripping our own
 # Stop hook (stop-pre-push-review.sh), which on main with no diff would
 # exit 2 and fail the reviewer for the wrong reason.
-SKIP_REVIEW=1 claude -p "$REVIEW_PROMPT" \
-  --permission-mode acceptEdits \
-  --output-format json \
-  --model "$REVIEWER_MODEL" \
-  --max-turns "$REVIEWER_MAX_TURNS" \
-  --disallowed-tools "$DISALLOWED" \
-  > "$RUN_OUT"
+# Array form so the timeout prefix is optional without duplicating the
+# claude command. timeout exit 124 is treated the same as any non-zero
+# claude exit by the existing handling below.
+RUN_CMD=()
+if [ -n "$TIMEOUT_CMD" ]; then
+  RUN_CMD=("$TIMEOUT_CMD" "${REVIEWER_TIMEOUT}s")
+fi
+RUN_CMD+=(env SKIP_REVIEW=1 claude -p "$REVIEW_PROMPT"
+  --permission-mode acceptEdits
+  --output-format json
+  --model "$REVIEWER_MODEL"
+  --max-turns "$REVIEWER_MAX_TURNS"
+  --disallowed-tools "$DISALLOWED")
+
+"${RUN_CMD[@]}" > "$RUN_OUT"
 CLAUDE_EXIT=$?
+if [ "$CLAUDE_EXIT" = "124" ] && [ -n "$TIMEOUT_CMD" ]; then
+  echo "review-pr: reviewer exceeded ${REVIEWER_TIMEOUT}s timeout — treating as failure" >&2
+fi
 
 if [ $CLAUDE_EXIT -ne 0 ]; then
   echo "review-pr: claude -p exited $CLAUDE_EXIT" >&2

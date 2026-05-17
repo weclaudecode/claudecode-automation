@@ -23,6 +23,9 @@ set -uo pipefail
 REPO=$(git rev-parse --show-toplevel)
 cd "$REPO"
 
+# shellcheck source=.claude/scripts/_dispatcher_lib.sh
+source "$REPO/.claude/scripts/_dispatcher_lib.sh"
+
 LOCKDIR=".claude/state/orchestrator.lock"
 LOG=".claude/state/orchestrator.log"
 NOTIFY=".claude/scripts/notify.sh"
@@ -30,6 +33,16 @@ MAX_PARALLEL="${ORCH_MAX_PARALLEL:-1}"
 LOG_MAX_BYTES="${ORCH_LOG_MAX_BYTES:-10485760}"  # 10 MiB default
 
 mkdir -p .claude/state .claude/plans/archive
+
+# Combined cleanup for normal exit AND signal interruption.
+# - Removes any worktrees still registered in the active manifest. Workers
+#   that exited gracefully will have unregistered themselves; survivors
+#   are leaks from workers killed mid-spawn.
+# - Releases the global tick lock.
+cleanup_tick() {
+  cleanup_active_worktrees 2>/dev/null || true
+  rm -rf "$LOCKDIR" 2>/dev/null
+}
 
 # Size-based log rotation
 if [ -f "$LOG" ]; then
@@ -48,7 +61,7 @@ echo "=== tick $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 # before trap fired) are broken by checking the recorded PID for liveness.
 if mkdir "$LOCKDIR" 2>/dev/null; then
   echo $$ > "$LOCKDIR/pid"
-  trap 'rm -rf "$LOCKDIR" 2>/dev/null' EXIT
+  trap cleanup_tick EXIT INT TERM
 else
   STALE_PID=$(cat "$LOCKDIR/pid" 2>/dev/null || echo "")
   if [ -n "$STALE_PID" ] && ! kill -0 "$STALE_PID" 2>/dev/null; then
@@ -56,7 +69,7 @@ else
     rm -rf "$LOCKDIR"
     if mkdir "$LOCKDIR" 2>/dev/null; then
       echo $$ > "$LOCKDIR/pid"
-      trap 'rm -rf "$LOCKDIR" 2>/dev/null' EXIT
+      trap cleanup_tick EXIT INT TERM
     else
       echo "lock race after stale-break, skipping"
       exit 0
@@ -66,6 +79,11 @@ else
     exit 0
   fi
 fi
+
+# Proactive cleanup: a previously-SIGKILLed tick may have left a manifest
+# behind (its trap never fired). Now that we own the lock, mop it up
+# before any phase runs — otherwise the surviving worktrees pile up.
+cleanup_active_worktrees 2>/dev/null || true
 
 STATE_FILE=$(ls -t .claude/plans/*.state.json 2>/dev/null \
   | xargs -I {} sh -c 'jq -er ".status == \"in_progress\"" {} >/dev/null 2>&1 && echo {}' \
@@ -129,8 +147,8 @@ if [ "$ALL_TERMINAL" = "true" ]; then
   BLOCKED_COUNT=$(jq -r '[.tasks[] | select(.status == "blocked")] | length' "$STATE_FILE")
   echo "plan $PLAN_NUM terminal: $MERGED_COUNT merged, $BLOCKED_COUNT blocked; archiving"
 
-  jq '.status = "done" | .completed_at = (now | todateiso8601)' "$STATE_FILE" \
-    > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+  state_write "$STATE_FILE" '.status = "done" | .completed_at = (now | todateiso8601)' \
+    || echo "warning: failed to mark plan done in state file" >&2
 
   mv "$PLAN_FILE" .claude/plans/archive/ 2>/dev/null || \
     echo "warning: could not move plan file to archive (already moved?)" >&2

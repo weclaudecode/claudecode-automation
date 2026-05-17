@@ -64,6 +64,9 @@ TASK_NUM="$2"
 REPO=$(git rev-parse --show-toplevel) || { echo "iterate-pr: not inside a git work tree" >&2; exit 1; }
 cd "$REPO" || { echo "iterate-pr: cd to repo root failed" >&2; exit 1; }
 
+# shellcheck source=_dispatcher_lib.sh
+source "$REPO/.claude/scripts/_dispatcher_lib.sh"
+
 # Absolute path so subsequent `cd "$WT"` doesn't break state reads/writes.
 case "$RAW_STATE_FILE" in
   /*) STATE_FILE="$RAW_STATE_FILE" ;;
@@ -101,15 +104,14 @@ fi
 ITER_CAP="${ORCH_REVIEW_MAX_ITERS:-3}"
 [[ "$ITER_CAP" =~ ^[0-9]+$ ]] || { echo "iterate-pr: ORCH_REVIEW_MAX_ITERS must be numeric, got '$ITER_CAP'" >&2; exit 1; }
 
-# Atomic state write helper.
+# Atomic state write helper — delegates to lib (mkdir-based lock makes
+# this safe with MAX_PARALLEL > 1).
 update_state() {
   local jq_expr="$1"
-  if jq --arg t "$TASK_NUM" "$jq_expr" "$STATE_FILE" > "$STATE_FILE.tmp"; then
-    mv "$STATE_FILE.tmp" "$STATE_FILE"
+  if state_write "$STATE_FILE" "$jq_expr" --arg t "$TASK_NUM"; then
     return 0
   fi
-  rm -f "$STATE_FILE.tmp"
-  echo "iterate-pr: jq update failed for task $TASK_NUM" >&2
+  echo "iterate-pr: state_write failed for task $TASK_NUM (jq or lock)" >&2
   return 1
 }
 
@@ -234,7 +236,15 @@ git worktree add "$WT" "$LOCAL_BRANCH" 2>/dev/null || {
   exit 1
 }
 
-cd "$WT" || { echo "iterate-pr: cd to worktree $WT failed" >&2; exit 1; }
+# Register before any work begins. Graceful exit paths below unregister;
+# signal-induced exits skip so the orchestrator's trap cleans the leak.
+register_worktree "$WT"
+
+cd "$WT" || {
+  echo "iterate-pr: cd to worktree $WT failed" >&2
+  unregister_worktree "$WT"
+  exit 1
+}
 
 # ---- Build iteration prompt ----
 ITER_SYSTEM="$REPO/.claude/prompts/iterator-system.md"
@@ -242,6 +252,7 @@ ITER_SYSTEM="$REPO/.claude/prompts/iterator-system.md"
   echo "iterate-pr: iterator system prompt missing: $ITER_SYSTEM" >&2
   cd "$REPO" || exit 1
   git worktree remove "$WT" --force 2>/dev/null || true
+  unregister_worktree "$WT"
   exit 1
 }
 
@@ -250,6 +261,8 @@ mkdir -p "$(dirname "$RUN_OUT")"
 
 WORKER_MODEL="${ORCH_WORKER_MODEL:-sonnet}"
 MAX_TURNS="${ORCH_MAX_TURNS:-30}"
+WORKER_TIMEOUT="${ORCH_WORKER_TIMEOUT:-600}"
+TIMEOUT_CMD=$(find_timeout_cmd)
 
 ITER_PROMPT=$(cat <<EOF
 $(cat "$ITER_SYSTEM")
@@ -297,18 +310,30 @@ no markdown fences around it.
 EOF
 )
 
-echo "iterate-pr: spawning iterator (model=$WORKER_MODEL, max-turns=$MAX_TURNS)..."
-
+# Build invocation as array so the timeout prefix is optional without
+# duplicating the claude command. Exit 124 from `timeout` is a worker
+# failure and naturally counts toward retries.
+RUN_CMD=()
+if [ -n "$TIMEOUT_CMD" ]; then
+  RUN_CMD=("$TIMEOUT_CMD" "${WORKER_TIMEOUT}s")
+  echo "iterate-pr: spawning iterator (model=$WORKER_MODEL, max-turns=$MAX_TURNS, timeout=${WORKER_TIMEOUT}s)..."
+else
+  echo "iterate-pr: spawning iterator (model=$WORKER_MODEL, max-turns=$MAX_TURNS, timeout=NONE — install coreutils/gtimeout)..."
+fi
 # bypassPermissions because acceptEdits blocks Bash (git commit, gh issue
 # create for follow-ups) and the worker silently fails after writing files
 # but before committing. Same lesson as launch-worker.sh.
-claude -p "$ITER_PROMPT" \
-  --permission-mode bypassPermissions \
-  --output-format json \
-  --model "$WORKER_MODEL" \
-  --max-turns "$MAX_TURNS" \
-  > "$RUN_OUT"
+RUN_CMD+=(claude -p "$ITER_PROMPT"
+  --permission-mode bypassPermissions
+  --output-format json
+  --model "$WORKER_MODEL"
+  --max-turns "$MAX_TURNS")
+
+"${RUN_CMD[@]}" > "$RUN_OUT"
 WORKER_EXIT=$?
+if [ "$WORKER_EXIT" = "124" ] && [ -n "$TIMEOUT_CMD" ]; then
+  echo "iterate-pr: iterator exceeded ${WORKER_TIMEOUT}s timeout — counted as failure"
+fi
 
 cd "$REPO" || { echo "iterate-pr: cd back to $REPO failed" >&2; exit 1; }
 
@@ -322,11 +347,14 @@ if [ $WORKER_EXIT -ne 0 ]; then
       | .tasks[$t].blocked_reason = "iterate_failed_3x"' || true
     [ -x "$NOTIFY" ] && bash "$NOTIFY" "plan $PLAN_NUM task $TASK_NUM iterate failed 3x" \
       "Iteration worker failed 3 times on PR #$PR_NUM. Investigate $RUN_OUT and worktree $WT"
-    # Keep worktree for inspection
+    # Worktree preserved for inspection; unregister so the orchestrator
+    # trap doesn't auto-remove it on tick exit.
+    unregister_worktree "$WT"
     exit 1
   else
     update_state ".tasks[\$t].retries = $NEW_RETRIES" || true
-    # Keep worktree for retry inspection
+    # Worktree preserved for retry inspection; unregister for same reason.
+    unregister_worktree "$WT"
     exit 0
   fi
 fi
@@ -347,6 +375,7 @@ if [ "$LOCAL_HEAD" = "$HEAD_OID" ]; then
   # That can happen when the worker decided every finding was out of scope.
   update_state '.tasks[$t].retries = 0' || true
   git worktree remove "$WT" --force 2>/dev/null || true
+  unregister_worktree "$WT"
   exit 0
 fi
 
@@ -357,11 +386,14 @@ if ! git push origin "HEAD:$HEAD_REF" --quiet 2> /tmp/orch-iter-push.$$.err; the
   [ -x "$NOTIFY" ] && bash "$NOTIFY" "iterate push failed" \
     "plan $PLAN_NUM task $TASK_NUM PR #$PR_NUM — $PUSH_ERR. State NOT advanced; next tick will retry."
   cd "$REPO" || true
+  # Worktree preserved (operator may want to inspect); unregister so the
+  # orchestrator trap doesn't auto-remove it.
+  unregister_worktree "$WT"
   exit 1
 fi
 rm -f /tmp/orch-iter-push.$$.err
 
-cd "$REPO" || { echo "iterate-pr: cd back to $REPO failed after push" >&2; exit 1; }
+cd "$REPO" || { echo "iterate-pr: cd back to $REPO failed after push" >&2; unregister_worktree "$WT"; exit 1; }
 
 # Worker pushed successfully — reset retries. Status stays in_review;
 # review-pass will re-review the new HEAD on next tick.
@@ -370,6 +402,7 @@ if ! update_state '.tasks[$t].retries = 0'; then
 fi
 
 git worktree remove "$WT" --force 2>/dev/null || true
+unregister_worktree "$WT"
 
 echo "iterate-pr: done (task $TASK_NUM, PR #$PR_NUM, iter=$NEW_ITER pushed)"
 exit 0
