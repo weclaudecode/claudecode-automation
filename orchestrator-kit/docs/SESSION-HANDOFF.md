@@ -1,19 +1,19 @@
 # Session handoff — implementation status
 
 Read this first in any new session. Snapshot of where the SDLC-evolution
-work stands as of `main` after commit `refactor(phase-2): extract
-launch-worker.sh (task 2.3.A)`.
+work stands as of `main` after commit `feat(phase-2): sweep-merges.sh
+(task 2.3.B)`.
 
 ## TL;DR
 
 Building an autonomous orchestrator that drives `claude -p` workers through
 implementation plans, evolving from sequential single-task ticks to a
 parallel, dependency-aware SDLC. **Phase 0 + Phase 1 fully shipped; Phase 2
-Tasks 2.1, 2.2, and 2.3.A done.** Next step is **Task 2.3.B**
-(`sweep-merges.sh`) — new script that walks tasks with a recorded `.pr`,
-checks each PR's merge state, and transitions `tasks.N.status` accordingly.
-First step that consumes the v2 state schema directly; once 2.3.B-F land,
-the orchestrator finally bridges v1 → v2.
+Tasks 2.1, 2.2, 2.3.A, and 2.3.B done.** Next step is **Task 2.3.E**
+(launch-pass refactor) — bounded-by-MAX_PARALLEL launch loop, reads v2
+schema via `tasks.N.status == "pending"` + `orch:deps-met`. After 2.3.E
+the tick rewrite (2.3.F) can finally wire all phases together against
+the v2 schema.
 
 ## Phase status
 
@@ -24,8 +24,9 @@ the orchestrator finally bridges v1 → v2.
 | 2 prep | Test-target public + CI workflow + branch protection | Done |
 | 2.1 | Strip Stop hook to smoke check | Done |
 | 2.2 | `review-pr.sh` (PR-comment reviewer with hardcoded `--disallowed-tools`) | Done + smoke-verified |
-| 2.3.A | Extract `launch-worker.sh` from `orchestrator.sh` (pure refactor) | **Done (this commit)** |
-| 2.3.B-G | Remaining dispatcher sub-plan (sweep / review-pass / iterate / launch refactor / wire / harden) | Not started |
+| 2.3.A | Extract `launch-worker.sh` from `orchestrator.sh` (pure refactor) | Done |
+| 2.3.B | `sweep-merges.sh` (v2-aware pending-merge sweep) | **Done + smoke-verified (this commit)** |
+| 2.3.C-G | Remaining dispatcher sub-plan (review-pass / iterate / launch refactor / wire / harden) | Not started |
 | 2.4 | Iteration cap (folded into 2.3.D) | Not started |
 | 3 | Optional auto-recommended + reviewer hard-blocks | Not started |
 | 4 | Parallel scheduler (raises `MAX_PARALLEL`) | Not started |
@@ -63,32 +64,35 @@ state — re-running the cycle is safe.
 
 ## Next concrete step
 
-**Task 2.3.B — `sweep-merges.sh`:** New script. For each task in
-`state.tasks.*` with a recorded `.pr`, query `gh pr view <pr> --json
-state` and transition `tasks.N.status` per the table in
-[`DISPATCHER-PLAN.md`](DISPATCHER-PLAN.md) sub-task B (MERGED → merged +
-close issue; CLOSED → blocked + notify + label). State writes are atomic
-via temp+mv. This is the **first script that reads the v2 state schema**
-(`tasks.N.status`) directly rather than the v1 fields — once it lands,
-sub-tasks 2.3.E (launch-pass) and 2.3.F (wire tick) will complete the
-v1 → v2 cutover.
+**Task 2.3.E — launch-pass refactor:** Wrap the existing
+`launch-worker.sh` (Task 2.3.A) in a launch loop bounded by
+`MAX_PARALLEL=${ORCH_MAX_PARALLEL:-1}`. New
+`.claude/scripts/find-ready-tasks.sh` (interim — Phase 4 adds
+`touches:` collision detection) emits up to N pending tasks where
+status="pending" AND issue has label `orch:deps-met`. Default
+MAX_PARALLEL=1 preserves current behavior. This is the script that
+finally consumes v2 schema via `tasks.N.status == "pending"`.
 
-**Open: end-to-end smoke for Task 2.3.A.** Can't be exercised against
-the test-target PLAN-SMOKE state.json (it's v2 schema, but the
-extracted `launch-worker.sh` still reads v1 like the original) — byte
-equivalence to the pre-extract per-task body is the verification for
-the refactor. Real runtime test deferred until 2.3.F's tick wiring
-lands.
+After 2.3.E, sub-task 2.3.F can wire all phases together (refresh-deps
+→ sweep-merges → review-pass guard → iterate-pass guard → launch-pass
+→ plan-completion check). Phases 2.3.C/D remain optional since they
+depend on review-pr.sh being callable from the tick — both are guarded
+by `[ -x .../review-pass.sh ]` per DISPATCHER-PLAN.
 
-**Smoke for Task 2.2 was verified** in the previous step:
-- Reviewer LLM call returned valid `{pass, summary, findings}` JSON
-- Zero tool calls on a small diff (deny-list trivially honored)
-- `gh api ... pulls/.../reviews` POST path works (manually exercised
-  with `event=COMMENT` since GitHub blocks self-approve)
-- PR body iter-marker update works
-- A latent bug was caught: `claude -p --output-format json` returns a
-  JSON **array** of message objects, not a single object — fixed in
-  commit `f8b0836`.
+**Recent smoke results (all on test-target):**
+
+- **Task 2.2** (review-pr.sh): reviewer JSON well-formed, zero tool
+  calls on small diff (deny-list trivially honored), `gh api
+  pulls/.../reviews` POST works (manually exercised with
+  `event=COMMENT` since GitHub blocks self-approve), PR-body iter
+  markers update correctly. Caught: `claude -p --output-format json`
+  returns a JSON **array**, not a single object — fix in `f8b0836`.
+- **Task 2.3.A** (launch-worker.sh): byte-equivalent extract verified
+  by diff. Runtime smoke deferred until 2.3.F bridges v1→v2.
+- **Task 2.3.B** (sweep-merges.sh): all four transitions verified
+  end-to-end against real PRs (PR #6 merged, PR #5 closed unmerged,
+  task 3+4 untouched). Issue close + label apply + notify log all
+  confirmed. test-target restored to post-ingest state after smoke.
 
 ## Open decisions / deferred items
 
@@ -143,7 +147,8 @@ lands.
     │   │   ├── create-issues.sh                        (Phase 1)
     │   │   ├── refresh-deps.sh                         (Phase 1)
     │   │   ├── review-pr.sh                            (Task 2.2)
-    │   │   ├── launch-worker.sh                        (Task 2.3.A — just added)
+    │   │   ├── launch-worker.sh                        (Task 2.3.A)
+    │   │   ├── sweep-merges.sh                         (Task 2.3.B — just added)
     │   │   ├── check-preconditions.sh                  (Phase 0)
     │   │   ├── setup-labels.sh                         (Phase 0)
     │   │   └── notify.sh                               (pre-existing)
@@ -172,6 +177,7 @@ lands.
 
 ## Recent commits (latest first)
 
+- `0b2c1e5` refactor(phase-2): extract launch-worker.sh (task 2.3.A)
 - `f8b0836` fix(phase-2): parse claude -p result entry from array form
 - `feb6323` feat(phase-2): review-pr.sh (task 2.2)
 - `97f7283` feat(phase-2): strip Stop hook to smoke check (task 2.1)
