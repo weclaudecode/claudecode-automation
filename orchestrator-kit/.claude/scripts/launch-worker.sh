@@ -235,6 +235,11 @@ SUMMARY=$(jq -r '.[] | select(.type == "result") | .result // empty' "$RUN_OUT" 
   | head -1)
 [ -z "$SUMMARY" ] && SUMMARY="Plan ${PLAN_NUM} / Task ${TASK_NUM} (auto)"
 
+# 5.7c: cap title at 80 chars; full summary stays in the body. Workers
+# routinely emit 200-400 char summaries, which makes the PR list unreadable.
+SUMMARY_TITLE="${SUMMARY:0:80}"
+[ "${#SUMMARY}" -gt 80 ] && SUMMARY_TITLE="${SUMMARY_TITLE}…"
+
 ISSUE_NUM=$(jq -r --arg t "$TASK_NUM" '.tasks[$t].issue // empty' "$STATE_FILE")
 CLOSES_LINE=""
 [ -n "$ISSUE_NUM" ] && CLOSES_LINE="Closes #${ISSUE_NUM}"
@@ -250,7 +255,7 @@ PR_BODY="$SUMMARY
 $CLOSES_LINE"
 
 PR_URL=$(gh pr create \
-  --title "[plan-${PLAN_NUM}/t${TASK_NUM}] $SUMMARY" \
+  --title "[plan-${PLAN_NUM}/t${TASK_NUM}] $SUMMARY_TITLE" \
   --body "$PR_BODY" \
   --head "$BRANCH" \
   --base main 2>&1) || {
