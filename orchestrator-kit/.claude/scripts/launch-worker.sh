@@ -206,6 +206,9 @@ if [ $WORKER_EXIT -ne 0 ]; then
   echo "worker exited $WORKER_EXIT; retry $NEW_RETRIES/3"
   if [ "$NEW_RETRIES" -ge 3 ]; then
     update_state '.tasks[$t].status = "blocked" | .tasks[$t].retries = 3 | .tasks[$t].blocked_at = (now | todateiso8601) | .tasks[$t].blocked_reason = "worker_failed_3x"'
+    # 5.7b: cascade-block transitive pending dependents so the plan can
+    # archive instead of looping forever on tasks whose dep will never close.
+    cascade_block "$STATE_FILE" "$TASK_NUM" || true
     bash "$NOTIFY" "plan $PLAN_NUM task $TASK_NUM blocked" \
       "Worker failed 3 times. Investigate $RUN_OUT and worktree $WT"
     # Worktree intentionally preserved for human inspection; unregister so

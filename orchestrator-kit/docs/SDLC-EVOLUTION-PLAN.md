@@ -676,6 +676,61 @@ confirm next orchestrator tick invokes `rebase-pr.sh` on A; confirm A's
 branch is force-pushed with the rebase and auto-merge fires once CI
 re-passes on the new SHA.
 
+### Task 5.7 — Three orchestrator quality fixes (findings from PLAN-02 smoke)
+
+**Files:** `orchestrator-kit/.claude/scripts/launch-worker.sh`,
+`orchestrator-kit/.claude/scripts/ingest-plan.sh`,
+`orchestrator-kit/.claude/scripts/_dispatcher_lib.sh`,
+`orchestrator-kit/.claude/scripts/sweep-merges.sh`,
+`orchestrator-kit/docs/PLAN-FORMAT.md`
+
+Surfaced during the PLAN-02 end-to-end run. Three small, well-scoped
+fixes that together remove the remaining blockers to fully-autonomous
+operation on real plans. Shipped as three commits in order
+5.7c → 5.7a → 5.7b (cheapest to most invasive).
+
+**5.7c — PR title cap.** `launch-worker.sh` was passing the worker's
+full `summary` (routinely 200–400 chars) into `gh pr create --title`.
+PLAN-02's PR #22 title was 350+ chars, making the PR list visually
+unreadable. Fix: derive `SUMMARY_TITLE="${SUMMARY:0:80}"` (plus a
+U+2026 ellipsis on overflow) and use it only in `--title`. Full
+summary stays in the PR body.
+
+**5.7a — Per-task `max_turns` override.** Default 30 turns was too
+tight for tasks integrating with alpha-tier APIs. PLAN-02 task 7
+(CDK Agent stack using `aws_bedrock_agentcore_alpha`) exhausted 31
+turns on each of 3 retries before blocking (~$3.50 spent). Fix:
+extend plan task syntax with an optional `**max_turns:** N` field;
+`ingest-plan.sh` captures it as a JSON number; `launch-worker.sh`
+applies per-task > `$ORCH_MAX_TURNS` env > default 30. Uses jq
+`has()` to dodge the same `//`-falsy trap previously documented at
+`launch-worker.sh:84`. Documented in `PLAN-FORMAT.md` alongside
+`auto_merge:`.
+
+**5.7b — Cascade-block on upstream task failure.** When a task
+transitions to `status: blocked` (3-strike retry exhaustion or PR
+closed unmerged), downstream tasks depending on it stayed `pending`
+forever — their dep issue never closed, `refresh-deps` never added
+`orch:deps-met`, `find-ready-tasks` never emitted them, and the
+plan-completion check saw `pending > 0` so the plan never archived.
+Fix: new `cascade_block` helper in `_dispatcher_lib.sh` does a
+python BFS over the reverse-dep graph and marks every transitive
+**pending** dependent as `blocked` with
+`blocked_reason: upstream_blocked_t<root>`. Skips merged, blocked,
+in_progress, and in_review tasks (sibling-worker safe). Idempotent
+via a `status == "pending"` guard in the jq filter. Called from
+`launch-worker.sh` after the 3-retry block and from `sweep-merges.sh`
+after the CLOSED-unmerged transition.
+
+**Verification:** per-fix unit checks ran during implementation:
+- 5.7c: 300-char synthetic summary → 81-char title (80 + ellipsis).
+- 5.7a: 1-task fixture with `**max_turns:** 60` ingests with
+  `.tasks["1"].max_turns == 60` (number); absent when field omitted;
+  precedence chain plan > env > default verified.
+- 5.7b: PLAN-SMOKE — blocking t1 cascades t3 only (t2, t4 untouched);
+  transitive fixture — blocking t1 cascades t2 AND t3; in-progress
+  dependent is NOT cascaded; re-run is silent no-op (idempotent).
+
 ---
 
 ## Rollout sequence

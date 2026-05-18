@@ -185,6 +185,108 @@ _worktree_manifest_unlock() {
   rm -rf "$repo_root/$ACTIVE_WORKTREES_FILE.lock.d" 2>/dev/null
 }
 
+# ---- cascade_block ----
+# When a task transitions to status: blocked, mark every transitive
+# pending dependent as blocked too. Without this, downstream tasks
+# whose dep-issue never closes stay pending forever, refresh-deps
+# never adds orch:deps-met, find-ready-tasks never emits them, and
+# the plan-completion check sees pending > 0 → plan never archives.
+#
+# Usage:
+#   cascade_block <state_file> <root_task_num>
+#
+# Policy (only-pending): we cascade ONLY tasks currently in `pending`.
+# in_progress / in_review tasks are sibling workers' live PRs; force-
+# blocking them would race with the worker's own state writes and
+# could resurrect a blocked entry on the next update. merged tasks
+# are already done. blocked tasks need no re-block.
+#
+# Idempotent: the jq filter checks status == "pending" before writing,
+# so concurrent re-runs (or a sibling racing the BFS) cause no-op
+# rather than incoherent state.
+#
+# blocked_reason carries the ROOT blocker's number (not the immediate
+# parent) so the audit trail points at the original cause.
+#
+# Returns:
+#   0 — cascade complete (zero or more tasks transitioned)
+#   1 — python BFS failed or state_write rejected (logged to stderr)
+cascade_block() {
+  local state_file="$1"
+  local root_task="$2"
+
+  if ! command -v python3 >/dev/null; then
+    echo "cascade_block: python3 required" >&2
+    return 1
+  fi
+
+  local downstream
+  # Python emits one task number per line so the bash `while read` loop is
+  # shell-agnostic. Earlier draft used space-separated + `for x in $var`,
+  # which works in bash but is a single-iteration with the whole string in
+  # zsh — landmine if anyone sources this lib from zsh.
+  downstream=$(python3 - "$state_file" "$root_task" <<'PY'
+import json, sys
+state_path, root = sys.argv[1], sys.argv[2]
+try:
+    with open(state_path) as f:
+        state = json.load(f)
+except (OSError, json.JSONDecodeError) as exc:
+    print(f"cascade_block: cannot read state: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+tasks = state.get("tasks", {})
+if root not in tasks:
+    print(f"cascade_block: root task {root} not in state.tasks", file=sys.stderr)
+    sys.exit(1)
+
+reverse = {}
+for k, t in tasks.items():
+    for dep in t.get("depends_on", []):
+        reverse.setdefault(str(dep), []).append(k)
+
+visited = set()
+queue = [root]
+out = []
+while queue:
+    cur = queue.pop(0)
+    for dep in reverse.get(cur, []):
+        if dep in visited:
+            continue
+        visited.add(dep)
+        if tasks[dep].get("status") != "pending":
+            continue
+        out.append(dep)
+        queue.append(dep)
+for n in out:
+    print(n)
+PY
+  ) || return 1
+
+  [ -z "$downstream" ] && return 0
+
+  local reason="upstream_blocked_t${root_task}"
+  local cascaded=0
+  local cascaded_list=""
+  while IFS= read -r dep; do
+    [ -z "$dep" ] && continue
+    if state_write "$state_file" \
+      'if .tasks[$t].status == "pending"
+       then .tasks[$t].status = "blocked"
+            | .tasks[$t].blocked_at = (now | todateiso8601)
+            | .tasks[$t].blocked_reason = $r
+       else . end' \
+      --arg t "$dep" --arg r "$reason"; then
+      cascaded=$((cascaded + 1))
+      cascaded_list="${cascaded_list}${cascaded_list:+ }${dep}"
+    else
+      echo "cascade_block: state_write failed for task $dep (root=t${root_task})" >&2
+    fi
+  done <<< "$downstream"
+  echo "cascade_block: marked $cascaded task(s) blocked downstream of t${root_task}: $cascaded_list"
+  return 0
+}
+
 # ---- find_timeout_cmd ----
 # Print the path to a timeout(1) binary, or empty string if none is
 # available. Callers should fall back to running without a timeout (with

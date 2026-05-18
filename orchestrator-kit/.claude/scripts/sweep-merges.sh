@@ -123,6 +123,9 @@ while read -r task_num pr_num issue_num; do
       echo "task $task_num: PR #$pr_num CLOSED unmerged -> marking task blocked"
       if update_state "$task_num" '.tasks[$t].status = "blocked" | .tasks[$t].blocked_at = (now | todateiso8601) | .tasks[$t].blocked_reason = "pr_closed_unmerged"'; then
         BLOCKED_COUNT=$((BLOCKED_COUNT + 1))
+        # 5.7b: cascade-block transitive pending dependents so the plan can
+        # archive instead of looping on tasks whose dep will never close.
+        cascade_block "$STATE_FILE" "$task_num" || true
         if [ "$issue_num" != "null" ] && [ -n "$issue_num" ]; then
           # Label is best-effort — depends on operator having run setup-labels.sh
           gh issue edit "$issue_num" --repo "$REPO" --add-label "orch:safety-block" >/dev/null 2>&1 \
