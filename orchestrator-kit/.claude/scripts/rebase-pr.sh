@@ -56,19 +56,32 @@ cd "$REPO_ROOT" || exit 1
 
 NOTIFY="$REPO_ROOT/.claude/scripts/notify.sh"
 
-PR_INFO=$(gh pr view "$PR_NUM" --repo "$REPO" --json mergeable,headRefName,labels 2>/dev/null) || {
+PR_INFO=$(gh pr view "$PR_NUM" --repo "$REPO" --json mergeable,mergeStateStatus,headRefName,labels 2>/dev/null) || {
   echo "rebase-pr: failed to fetch PR #$PR_NUM" >&2
   exit 1
 }
 
 MERGEABLE=$(echo "$PR_INFO" | jq -r '.mergeable // "UNKNOWN"')
+MERGE_STATE=$(echo "$PR_INFO" | jq -r '.mergeStateStatus // "UNKNOWN"')
 BRANCH=$(echo "$PR_INFO" | jq -r '.headRefName')
 HAS_SAFETY_LABEL=$(echo "$PR_INFO" | jq -r '[.labels[]?.name] | contains(["orch:safety-block"])')
 
-if [ "$MERGEABLE" != "CONFLICTING" ]; then
-  echo "rebase-pr: PR #$PR_NUM mergeable=$MERGEABLE — no rebase needed"
+# Two reasons to rebase:
+#   mergeable=CONFLICTING — actual merge conflict; rebase may abort.
+#   mergeStateStatus=BEHIND — no conflict, but strict status checks require
+#     the branch to be up-to-date with main before auto-merge fires.
+#     Sibling PR merging into main while ours was in flight is the common
+#     trigger; without this branch the orchestrator deadlocks on BEHIND.
+TRIGGER=""
+[ "$MERGEABLE" = "CONFLICTING" ] && TRIGGER="conflict"
+[ "$MERGE_STATE" = "BEHIND" ] && TRIGGER="${TRIGGER:+$TRIGGER+}stale"
+
+if [ -z "$TRIGGER" ]; then
+  echo "rebase-pr: PR #$PR_NUM mergeable=$MERGEABLE mergeStateStatus=$MERGE_STATE — no rebase needed"
   exit 0
 fi
+
+echo "rebase-pr: PR #$PR_NUM trigger=$TRIGGER (mergeable=$MERGEABLE mergeStateStatus=$MERGE_STATE)"
 
 if [ "$HAS_SAFETY_LABEL" = "true" ]; then
   echo "rebase-pr: PR #$PR_NUM already orch:safety-block — skipping (human's on it)"

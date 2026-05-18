@@ -136,13 +136,24 @@ while read -r task_num pr_num; do
   HEAD_OID=$(echo "$PR_INFO" | jq -r '.headRefOid')
   PR_BODY=$(echo "$PR_INFO" | jq -r '.body // ""')
   LAST_SHA=$(echo "$PR_BODY" | grep -oE 'orch:review-sha:[a-f0-9]+' | head -1 | cut -d: -f3)
+  LAST_CI_GATE_SHA=$(echo "$PR_BODY" | grep -oE 'orch:ci-gate-sha:[a-f0-9]+' | head -1 | cut -d: -f3)
 
-  if [ -z "$LAST_SHA" ] || [ "$HEAD_OID" != "$LAST_SHA" ]; then
-    # Marker missing or for an older commit → review-pass should run
-    # against current HEAD before we iterate. Otherwise we'd address
-    # findings the latest push may have already resolved.
+  # Either marker matching HEAD proves we have fresh feedback on the
+  # current commit. review-sha = LLM review (review-pr.sh); ci-gate-sha =
+  # synthetic CI-failure blocker (review-pass.sh Task 5.4 path). Without
+  # checking both, the CI gate path is invisible to iterate-pass and the
+  # loop deadlocks on a CI-only failure.
+  FRESH_FEEDBACK=0
+  [ -n "$LAST_SHA" ] && [ "$HEAD_OID" = "$LAST_SHA" ] && FRESH_FEEDBACK=1
+  [ -n "$LAST_CI_GATE_SHA" ] && [ "$HEAD_OID" = "$LAST_CI_GATE_SHA" ] && FRESH_FEEDBACK=1
+
+  if [ "$FRESH_FEEDBACK" -eq 0 ]; then
+    # No marker matches HEAD → review-pass should re-evaluate against
+    # current HEAD before we iterate. Otherwise we'd address findings the
+    # latest push may have already resolved.
     LAST_DISPLAY="${LAST_SHA:-never}"
-    echo "iterate-pass: task $task_num PR #$pr_num review-sha=${LAST_DISPLAY:0:8} != head=${HEAD_OID:0:8} — skip (let review-pass refresh)"
+    CI_DISPLAY="${LAST_CI_GATE_SHA:-never}"
+    echo "iterate-pass: task $task_num PR #$pr_num review-sha=${LAST_DISPLAY:0:8} ci-gate-sha=${CI_DISPLAY:0:8} both != head=${HEAD_OID:0:8} — skip (let review-pass refresh)"
     SKIPPED_STALE_SHA=$((SKIPPED_STALE_SHA + 1))
     continue
   fi

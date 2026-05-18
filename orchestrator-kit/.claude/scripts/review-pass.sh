@@ -80,6 +80,8 @@ SKIPPED=0
 NOT_OPEN=0
 REBASED=0
 CONFLICT_DEFERRED=0
+CI_BLOCKED=0
+CI_PENDING_DEFERRED=0
 REVIEWER_PIDS=()
 
 # Poll-based slot cap. Wait until live PIDs count < MAX_REVIEWS.
@@ -102,8 +104,10 @@ wait_for_slot() {
 while read -r task_num pr_num; do
   [ -z "$task_num" ] && continue
 
-  # One gh call for body + sha + state + mergeable
-  PR_INFO=$(gh pr view "$pr_num" --repo "$REPO" --json body,headRefOid,state,mergeable 2>/dev/null || echo "")
+  # One gh call for body + sha + state + mergeable + mergeStateStatus + statusCheckRollup.
+  # mergeStateStatus catches BEHIND (Task 5.6); statusCheckRollup feeds the
+  # Task 5.4 CI gate below.
+  PR_INFO=$(gh pr view "$pr_num" --repo "$REPO" --json body,headRefOid,state,mergeable,mergeStateStatus,statusCheckRollup 2>/dev/null || echo "")
   if [ -z "$PR_INFO" ]; then
     echo "review-pass: failed to fetch PR #$pr_num (task $task_num); skipping" >&2
     continue
@@ -116,21 +120,26 @@ while read -r task_num pr_num; do
     continue
   fi
 
-  # Task 4.4: if mergeable=CONFLICTING, hand off to rebase-pr.sh and skip
-  # review this tick. UNKNOWN (GitHub still computing) is left to next
-  # tick. The HEAD SHA marker comparison comes after — a successful
-  # rebase advances the SHA, so the *next* tick re-reviews fresh.
+  # Task 4.4 + Task 5.6: hand off to rebase-pr.sh when the branch needs a
+  # refresh against main — either an actual merge conflict (CONFLICTING)
+  # or just stale-against-strict-checks (BEHIND). Both prevent auto-merge
+  # and both are fixable by the same rebase + force-push flow. UNKNOWN
+  # (GitHub still computing) is left to the next tick.
   MERGEABLE=$(echo "$PR_INFO" | jq -r '.mergeable // "UNKNOWN"')
-  if [ "$MERGEABLE" = "CONFLICTING" ]; then
+  MERGE_STATE=$(echo "$PR_INFO" | jq -r '.mergeStateStatus // "UNKNOWN"')
+  if [ "$MERGEABLE" = "CONFLICTING" ] || [ "$MERGE_STATE" = "BEHIND" ]; then
+    REASON="CONFLICTING"
+    [ "$MERGE_STATE" = "BEHIND" ] && REASON="BEHIND"
+    [ "$MERGEABLE" = "CONFLICTING" ] && [ "$MERGE_STATE" = "BEHIND" ] && REASON="CONFLICTING+BEHIND"
     if [ "$HAVE_REBASE" -eq 1 ]; then
-      echo "review-pass: PR #$pr_num task $task_num CONFLICTING — invoking rebase-pr.sh"
+      echo "review-pass: PR #$pr_num task $task_num $REASON — invoking rebase-pr.sh"
       if bash "$REBASE_PR" "$pr_num" "$REPO"; then
         REBASED=$((REBASED + 1))
       else
         CONFLICT_DEFERRED=$((CONFLICT_DEFERRED + 1))
       fi
     else
-      echo "review-pass: PR #$pr_num CONFLICTING but rebase-pr.sh missing — deferring"
+      echo "review-pass: PR #$pr_num $REASON but rebase-pr.sh missing — deferring"
       CONFLICT_DEFERRED=$((CONFLICT_DEFERRED + 1))
     fi
     continue
@@ -139,6 +148,75 @@ while read -r task_num pr_num; do
   HEAD_OID=$(echo "$PR_INFO" | jq -r '.headRefOid')
   PR_BODY=$(echo "$PR_INFO" | jq -r '.body // ""')
   LAST_SHA=$(echo "$PR_BODY" | grep -oE 'orch:review-sha:[a-f0-9]+' | head -1 | cut -d: -f3)
+  LAST_CI_GATE_SHA=$(echo "$PR_BODY" | grep -oE 'orch:ci-gate-sha:[a-f0-9]+' | head -1 | cut -d: -f3)
+
+  # Task 5.4: CI gate (precedes the LLM-review SHA short-circuit so a
+  # CI-failed PR is re-evaluated until HEAD advances). Two independent
+  # markers: orch:review-sha tracks LLM reviews, orch:ci-gate-sha tracks
+  # CI-gate posts. This keeps the two paths from confusing each other —
+  # a PR can be LLM-approved at SHA X yet still need CI-gating at SHA X
+  # if CI later went red, and vice versa.
+  #
+  # The LLM reviewer judges code-vs-spec; CI is observable infra state and
+  # shouldn't be its job to discover.
+  CI_PENDING=$(echo "$PR_INFO" | jq -r '
+    [.statusCheckRollup[]?
+      | select(.status == "IN_PROGRESS" or .status == "QUEUED" or .status == "PENDING")
+      | .name
+    ] | length
+  ' 2>/dev/null || echo 0)
+
+  if [ "${CI_PENDING:-0}" -gt 0 ]; then
+    echo "review-pass: PR #$pr_num task $task_num has $CI_PENDING CI check(s) still running — deferring review"
+    CI_PENDING_DEFERRED=$((CI_PENDING_DEFERRED + 1))
+    continue
+  fi
+
+  CI_FAILED=$(echo "$PR_INFO" | jq -r '
+    [.statusCheckRollup[]?
+      | select(.conclusion == "FAILURE" or .conclusion == "TIMED_OUT"
+               or .conclusion == "CANCELLED" or .conclusion == "ACTION_REQUIRED"
+               or .conclusion == "STARTUP_FAILURE")
+      | "\(.name) (\(.conclusion))"
+    ] | join(", ")
+  ' 2>/dev/null || echo "")
+
+  if [ -n "$CI_FAILED" ]; then
+    # Idempotency: don't re-fire if we've already CI-gated this exact SHA.
+    if [ -n "$LAST_CI_GATE_SHA" ] && [ "$HEAD_OID" = "$LAST_CI_GATE_SHA" ]; then
+      echo "review-pass: PR #$pr_num CI red but already gated at ${LAST_CI_GATE_SHA:0:8} — skipping"
+      SKIPPED=$((SKIPPED + 1))
+      continue
+    fi
+
+    echo "review-pass: PR #$pr_num task $task_num CI red ($CI_FAILED) — posting synthetic blocker"
+
+    CI_FAILED_LIST=$(echo "$CI_FAILED" | tr ',' '\n' | sed 's/^[[:space:]]*/- /')
+    CI_REVIEW_BODY=$(printf "**Orchestrator review** (CI gate, sha \`%s\`)\n\nCI is red — the following required check(s) failed:\n%s\n\nWorker must address before this PR can merge. The orchestrator's LLM reviewer is bypassed for CI failures since the failure is observable via \`gh pr checks %s\`.\n" \
+      "${HEAD_OID:0:8}" \
+      "$CI_FAILED_LIST" \
+      "$pr_num")
+
+    CI_REVIEW_PAYLOAD=$(jq -n --arg cid "$HEAD_OID" --arg body "$CI_REVIEW_BODY" \
+      '{commit_id: $cid, event: "COMMENT", body: $body}')
+
+    if echo "$CI_REVIEW_PAYLOAD" | gh api "repos/$REPO/pulls/$pr_num/reviews" --method POST --input - >/dev/null 2>&1; then
+      gh pr edit "$pr_num" --repo "$REPO" --add-label "orch:review-blocked" >/dev/null 2>&1 || \
+        echo "review-pass: warning — failed to apply orch:review-blocked on PR #$pr_num" >&2
+
+      # Update ci-gate-sha marker (separate from review-sha to keep the
+      # two short-circuits independent).
+      NEW_BODY=$(echo "$PR_BODY" | grep -v 'orch:ci-gate-sha:' || true)
+      NEW_BODY=$(printf "%s\n<!-- orch:ci-gate-sha:%s -->\n" "$NEW_BODY" "$HEAD_OID")
+      gh pr edit "$pr_num" --repo "$REPO" --body "$NEW_BODY" >/dev/null 2>&1 || \
+        echo "review-pass: warning — failed to update ci-gate-sha marker on PR #$pr_num" >&2
+
+      CI_BLOCKED=$((CI_BLOCKED + 1))
+    else
+      echo "review-pass: failed to post CI-gate review on PR #$pr_num" >&2
+    fi
+    continue
+  fi
 
   if [ -n "$LAST_SHA" ] && [ "$HEAD_OID" = "$LAST_SHA" ]; then
     echo "review-pass: PR #$pr_num task $task_num already reviewed at ${LAST_SHA:0:8}"
@@ -160,5 +238,5 @@ for p in "${REVIEWER_PIDS[@]+"${REVIEWER_PIDS[@]}"}"; do
   wait "$p" 2>/dev/null || true
 done
 
-echo "review-pass: done — launched=$LAUNCHED skipped=$SKIPPED not_open=$NOT_OPEN rebased=$REBASED conflict_deferred=$CONFLICT_DEFERRED"
+echo "review-pass: done — launched=$LAUNCHED skipped=$SKIPPED not_open=$NOT_OPEN rebased=$REBASED conflict_deferred=$CONFLICT_DEFERRED ci_blocked=$CI_BLOCKED ci_pending_deferred=$CI_PENDING_DEFERRED"
 exit 0

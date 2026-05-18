@@ -583,6 +583,99 @@ active plans, not just within one. Risk: requires global state.json
 discovery and locking across plan files. Defer until multi-plan parallel
 is a real need.
 
+### Task 5.4 — CI-status gate in review-pass (finding from PLAN-02 smoke)
+
+**File:** `orchestrator-kit/.claude/scripts/review-pass.sh`
+
+Surfaced during the PLAN-02 end-to-end run: the LLM reviewer judges
+code-vs-spec but does not proactively check `gh pr checks <PR>`. A PR
+whose diff matches the task spec but whose CI is red gets `APPROVE`d,
+auto-merge waits forever for a green check that never comes, and the
+orchestrator's iterate loop never engages because no `orch:review-blocked`
+label is applied.
+
+Fix: before calling `review-pr.sh` in the per-PR loop, fetch the PR's
+status checks via `gh pr view --json statusCheckRollup`. If any required
+check has `conclusion == "failure"`:
+
+1. Skip the LLM reviewer entirely (cheap short-circuit).
+2. Post a synthetic `**Orchestrator review**` COMMENT with a body like:
+   ```
+   **Orchestrator review** (CI gate, sha `<short_sha>`)
+
+   CI is red — the following checks failed:
+   - `<check_name>`: <conclusion> (<run_url>)
+
+   Worker must address before this PR can merge.
+   ```
+3. Apply `orch:review-blocked` label so iterate-pass picks it up next tick.
+4. Skip incrementing the review-iteration counter (CI failures are
+   independent of LLM review iterations).
+
+Edge cases to handle:
+- `mergeable == CONFLICTING` already routes to `rebase-pr.sh` earlier in
+  the loop — that path takes precedence over CI-gate.
+- Check status `IN_PROGRESS` or `QUEUED` → defer the LLM review until next
+  tick; don't act on incomplete CI.
+- No required checks configured → behave as today (run LLM reviewer).
+
+**Verification:** craft a PR where the diff matches its task spec exactly
+but a CI step is forced to fail (e.g. `exit 1` in the test job); confirm
+review-pass posts the synthetic blocker, applies the label, and that
+iterate-pass spawns iterate-pr on the next tick.
+
+### Task 5.5 — Bot identity separation (related to 5.4)
+
+When the orchestrator's gh user equals the PR author, GitHub blocks
+`APPROVE`/`REQUEST_CHANGES` reviews. Current fallback in `review-pr.sh`
+posts as `COMMENTED` and relies on labels (`orch:review-blocked`,
+`orch:safety-block`) to drive downstream behavior. This works but loses
+GitHub's formal review-state tracking — repos that enforce required
+approvers via branch protection still won't auto-merge.
+
+Document the recommended deployment: separate gh tokens for the worker
+identity (write) and the reviewer identity (read + post-review only).
+For ops who can't easily run two identities, the COMMENT + label fallback
+is the supported path; mention it explicitly in the README's permissions
+section.
+
+No code change required; this is a docs + recommended-config task.
+
+### Task 5.6 — Handle PRs that are MERGEABLE but BEHIND main (finding from PLAN-02 smoke)
+
+**File:** `orchestrator-kit/.claude/scripts/rebase-pr.sh`, `review-pass.sh`
+
+Surfaced during the PLAN-02 end-to-end run: when sibling PR B merges
+into main while PR A is still in flight, A's `mergeable` stays
+`MERGEABLE` but `mergeStateStatus` flips to `BEHIND`. Branch protection
+with `required_status_checks.strict: true` (the recommended setting per
+`check-preconditions.sh`) blocks the auto-merge until A's branch is
+brought up to date with main. The orchestrator's existing rebase logic
+only fires on `CONFLICTING`, so BEHIND PRs sit forever — the deadlock
+seen during PLAN-02 ticks 9-N.
+
+Fix:
+1. In `rebase-pr.sh`, also fetch `mergeStateStatus` and treat `BEHIND`
+   as a rebase trigger alongside `CONFLICTING`. Same rebase + force-push
+   machinery — BEHIND should never produce conflicts (by definition the
+   merge is conflict-free), but use `git rebase --abort` + safety-block
+   path as a defensive fallback if it somehow does.
+2. In `review-pass.sh`, broaden the per-PR check from
+   `mergeable == CONFLICTING` to `(mergeable == CONFLICTING ||
+   mergeStateStatus == BEHIND)` so the dispatch fires.
+
+This task ALSO needs a bump to `ORCH_REVIEW_MAX_ITERS` (default 3 → 5)
+because the loop seen during PLAN-02 (LLM-blocker → iterate → CI-block
+→ iterate → LLM-blocker on the lazy-init pattern) consumed iterations
+faster than the cap allowed. Real production work routinely needs 4-5
+cycles when the LLM reviewer and CI gate both flag issues.
+
+**Verification:** create two PRs (A, B) from main with no file overlap;
+merge B first; confirm PR A immediately transitions to `BEHIND`;
+confirm next orchestrator tick invokes `rebase-pr.sh` on A; confirm A's
+branch is force-pushed with the rebase and auto-merge fires once CI
+re-passes on the new SHA.
+
 ---
 
 ## Rollout sequence

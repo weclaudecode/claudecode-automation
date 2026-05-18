@@ -101,7 +101,7 @@ if [ -z "$PR_NUM" ]; then
   exit 1
 fi
 
-ITER_CAP="${ORCH_REVIEW_MAX_ITERS:-3}"
+ITER_CAP="${ORCH_REVIEW_MAX_ITERS:-5}"
 [[ "$ITER_CAP" =~ ^[0-9]+$ ]] || { echo "iterate-pr: ORCH_REVIEW_MAX_ITERS must be numeric, got '$ITER_CAP'" >&2; exit 1; }
 
 # Atomic state write helper — delegates to lib (mkdir-based lock makes
@@ -157,19 +157,28 @@ fi
 NEW_ITER=$((PRIOR_ITER + 1))
 echo "iterate-pr: task=$TASK_NUM/$TOTAL pr=#$PR_NUM iter=$NEW_ITER/$ITER_CAP retries=$RETRIES head=${HEAD_OID:0:8}"
 
-# ---- Fetch reviewer findings (latest CHANGES_REQUESTED review only) ----
-# gh pr view --json reviews fields: state, body, author, submittedAt, id is
-# not exposed; fall back to gh api for stable id matching of inline comments.
+# ---- Fetch reviewer findings (latest orchestrator review only) ----
+# Accept both CHANGES_REQUESTED and COMMENTED — review-pr.sh falls back to
+# COMMENT when the PR author equals the orchestrator's gh user (GitHub's
+# self-review restriction). Filter to reviews authored by the orchestrator
+# (body starts with the canonical "**Orchestrator review**" prefix); we
+# never iterate on human reviews — humans take it over.
+# Iterate-pass.sh has already filtered on the orch:review-blocked label
+# before calling us, so the latest matching review is trusted to be a blocker.
 REVIEWS_JSON=$(gh api "repos/$REPO_OWNER_REPO/pulls/$PR_NUM/reviews" --paginate 2>/dev/null) || {
   echo "iterate-pr: failed to fetch reviews for PR #$PR_NUM" >&2
   exit 1
 }
 
 LATEST_REVIEW=$(echo "$REVIEWS_JSON" \
-  | jq '[.[] | select(.state == "CHANGES_REQUESTED")] | sort_by(.submitted_at) | last // null')
+  | jq '[
+      .[]
+      | select(.state == "CHANGES_REQUESTED" or .state == "COMMENTED")
+      | select((.body // "") | startswith("**Orchestrator review**"))
+    ] | sort_by(.submitted_at) | last // null')
 
 if [ "$LATEST_REVIEW" = "null" ] || [ -z "$LATEST_REVIEW" ]; then
-  echo "iterate-pr: PR #$PR_NUM has no CHANGES_REQUESTED review (label set without blocking review?); skipping" >&2
+  echo "iterate-pr: PR #$PR_NUM has no orchestrator review (CHANGES_REQUESTED or COMMENTED); skipping" >&2
   exit 1
 fi
 

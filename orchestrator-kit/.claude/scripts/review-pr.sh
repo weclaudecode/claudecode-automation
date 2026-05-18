@@ -277,6 +277,19 @@ else
   VERDICT_LINE="approved"
 fi
 
+# GitHub limitation: a PR's author cannot post APPROVE or REQUEST_CHANGES
+# reviews on their own PR (HTTP 422). When the orchestrator runs as the
+# same gh identity as the worker — the common single-bot deployment — we
+# fall back to COMMENT. Labels (orch:review-blocked, orch:safety-block)
+# applied below carry the verdict to iterate-pass regardless of event type.
+# Operators with two bot identities won't trip this branch.
+PR_AUTHOR=$(gh pr view "$PR_NUM" --repo "$REPO" --json author -q .author.login 2>/dev/null || echo "")
+GH_USER=$(gh api user --jq .login 2>/dev/null || echo "")
+if [ -n "$PR_AUTHOR" ] && [ -n "$GH_USER" ] && [ "$PR_AUTHOR" = "$GH_USER" ] && [ "$EVENT" != "COMMENT" ]; then
+  echo "review-pr: self-review detected (author=$PR_AUTHOR == user); using COMMENT event (verdict in body + labels)"
+  EVENT="COMMENT"
+fi
+
 # ---- Build inline comments (file+line) and orphan findings (top-level body) ----
 INLINE_COMMENTS=$(echo "$VERDICT_JSON" | jq '[
   .findings[]?
