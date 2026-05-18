@@ -75,6 +75,25 @@ still be human-reviewed.
 Default (field omitted): auto-detector decides based on patterns listed
 in `ingest-plan.sh`.
 
+### `max_turns: <int>`
+
+Override the worker's per-task `claude -p --max-turns` cap for this
+task only. Used when a task integrates with alpha-tier APIs, large
+docs lookups, or other surfaces that legitimately need more turns
+than the global default to converge.
+
+```markdown
+## Task 7: CDK Agent stack using aws_bedrock_agentcore_alpha
+**depends_on:** [6]
+**touches:** [`infra/agent_stack/**`]
+**max_turns:** 60
+```
+
+Precedence: per-task `max_turns:` in the plan beats `$ORCH_MAX_TURNS`
+env beats the built-in default of 30. The env var stays useful as a
+one-off global override during debugging; plans should set the value
+explicitly when a task is reliably tight against the default.
+
 ## Worked example
 
 ```markdown

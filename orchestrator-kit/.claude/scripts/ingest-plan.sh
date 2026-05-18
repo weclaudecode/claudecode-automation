@@ -97,9 +97,10 @@ TASKS_JSON=$("$GAWK" '
     printf "{\"task\": %s, \"title\": \"%s\", \"depends_on\": [%s], \"touches\": [%s]",
       current_task, title, depends_on, touches_json
     if (auto_merge_set) printf ", \"auto_merge\": %s", auto_merge_value
+    if (max_turns_set) printf ", \"max_turns\": %s", max_turns_value
     printf "}\n"
   }
-  BEGIN { in_fence = 0; current_task = ""; depends_on = ""; touches_json = ""; auto_merge_set = 0 }
+  BEGIN { in_fence = 0; current_task = ""; depends_on = ""; touches_json = ""; auto_merge_set = 0; max_turns_set = 0 }
   /^```/ { in_fence = !in_fence; next }
   in_fence { next }
   /^## Task [0-9]+:/ {
@@ -112,6 +113,8 @@ TASKS_JSON=$("$GAWK" '
     touches_json = ""
     auto_merge_set = 0
     auto_merge_value = ""
+    max_turns_set = 0
+    max_turns_value = ""
     next
   }
   /^## / && current_task != "" {
@@ -137,6 +140,13 @@ TASKS_JSON=$("$GAWK" '
     if (match($0, /\*\*auto_merge:\*\*[[:space:]]*([a-zA-Z]+)/, a) > 0) {
       auto_merge_set = 1
       auto_merge_value = a[1]
+    }
+    next
+  }
+  current_task != "" && /^\*\*max_turns:\*\*/ {
+    if (match($0, /\*\*max_turns:\*\*[[:space:]]*([0-9]+)/, mt) > 0) {
+      max_turns_set = 1
+      max_turns_value = mt[1]
     }
     next
   }
@@ -280,15 +290,18 @@ OVERRIDES=$(
 
 # ---- Build state.json ----
 TASKS_OBJECT=$(printf '%s\n' "$TASKS_JSON" | jq -s '
-  reduce .[] as $t ({}; .[$t.task | tostring] = {
-    title: $t.title,
-    depends_on: $t.depends_on,
-    touches: $t.touches,
-    issue: null,
-    pr: null,
-    status: "pending",
-    retries: 0
-  })
+  reduce .[] as $t ({}; .[$t.task | tostring] = (
+    {
+      title: $t.title,
+      depends_on: $t.depends_on,
+      touches: $t.touches,
+      issue: null,
+      pr: null,
+      status: "pending",
+      retries: 0
+    }
+    + (if $t | has("max_turns") then {max_turns: $t.max_turns} else {} end)
+  ))
 ')
 
 jq -n \
