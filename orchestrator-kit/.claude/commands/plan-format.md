@@ -13,7 +13,12 @@ You are converting a freeform plan markdown file into the orchestrator's strict 
 
 ## Reference
 
-Read `orchestrator-kit/docs/PLAN-FORMAT.md` (or `docs/PLAN-FORMAT.md` if the kit has been installed into a target repo — same content) for the canonical format spec. Do this first.
+Try to read the canonical format spec from one of these paths (use the first that exists):
+- `orchestrator-kit/docs/PLAN-FORMAT.md` (kit source repo)
+- `.claude/docs/PLAN-FORMAT.md` (if the kit installer was updated to copy it)
+- `docs/PLAN-FORMAT.md` (older install layouts)
+
+If none are found, do NOT abort. The rules you need are summarized below in this prompt — proceed using them. The format file is supplementary.
 
 ## Workflow
 
