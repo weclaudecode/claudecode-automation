@@ -272,3 +272,30 @@ plans under `orchestrator-kit/docs/fixtures/` (`PLAN-SMOKE.md`,
 3. Whether the README pointer should live in `orchestrator-kit/README.md`
    (kit-level) or also in the installer-template `CLAUDE.md` (target-repo
    level after install). Likely both, brief.
+
+### Resolution (Task 1 of IMPL-plan-authoring)
+
+**Project-level skill loading:** YES — Claude Code auto-loads from `<repo>/.claude/skills/`.
+
+Verification method: docs research on 2026-05-20 against `~/.claude/cache/changelog.md`
+(empirical test deferred — requires a fresh Claude Code session a subagent cannot launch).
+
+Key evidence from the changelog:
+
+- v2.1.0 entry: "Added automatic skill hot-reload - skills created or modified in
+  `~/.claude/skills` **or `.claude/skills`** are now immediately available without
+  restarting the session" — confirms `.claude/skills/` (project-level) is an auto-loaded
+  path alongside `~/.claude/skills/`.
+- "Fixed custom agents and skills not being discovered when running from a git worktree —
+  project-level `.claude/agents/` and `.claude/skills/` from the main repository are now
+  included" — confirms project-level `.claude/skills/` is a first-class concept the
+  harness discovers automatically.
+- "Fixed project skills without a `description:` frontmatter field not appearing in
+  Claude's available skills list" — further confirms project skills are loaded and surfaced.
+- "Fixed subagents not discovering project, user, or plugin skills via the Skill tool" —
+  shows the loading scope is `(project | user | plugin)`, not `user` only.
+
+Implication for installer: **no installer change needed.** Skills placed at
+`<repo>/.claude/skills/<name>/SKILL.md` by the kit installer are automatically picked up
+when a Claude Code session opens in that repo. Task 9 of the implementation plan
+("add installer step if loading is not automatic") can be marked skipped.
