@@ -12,7 +12,7 @@ via `ingest-plan.sh`.
 Expose `render_receipt(order)` returning HTML.
 
 ## Task 2: Add the receipt-sender Lambda
-**depends_on:** []
+**depends_on:** [1]
 **touches:** [`lambdas/send_receipt/handler.py`, `tests/test_send_receipt.py`]
 
 Uses the template from task 1.
