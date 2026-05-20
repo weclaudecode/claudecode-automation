@@ -32,6 +32,10 @@ cp -r /path/to/this/kit/.claude .
 cp /path/to/this/kit/orchestrator.sh .
 cp /path/to/this/kit/CLAUDE.md .   # only if you don't already have one — review carefully
 
+# Also copy the canonical format spec — /plan-format and plan-author skill read it
+mkdir -p .claude/docs
+cp /path/to/this/kit/docs/PLAN-FORMAT.md .claude/docs/PLAN-FORMAT.md
+
 chmod +x orchestrator.sh
 chmod +x .claude/hooks/*.sh
 chmod +x .claude/scripts/*.sh
@@ -52,6 +56,26 @@ Then customize:
 1. Edit `CLAUDE.md` — your stack, conventions, must-rules
 2. Edit `.claude/defaults.md` — your "when in doubt" rules
 3. Optionally edit `.claude/state/decisions.md` to seed prior decisions
+
+## Authoring plans
+
+Two helpers create or import plans in the strict
+[`PLAN-FORMAT.md`](docs/PLAN-FORMAT.md) shape that `ingest-plan.sh`
+accepts:
+
+- **`/plan-format <input-path> [slug]`** — slash command. Converts a
+  freeform plan markdown file into a valid `PLAN-NN-<slug>.md`,
+  then runs `ingest-plan.sh` and iterates on validator errors. Use
+  when you already have a plan written and want it formatted.
+- **`plan-author` skill** — triggers on phrases like "design an
+  orchestrator plan for X". Interactively walks goal →
+  decomposition → dep/touches → emit + validate. Use when you're
+  starting from a goal, not a draft.
+
+Both write to `.claude/plans/`, do not clobber existing files, and
+never commit on your behalf. See
+[`SPEC-plan-authoring.md`](docs/SPEC-plan-authoring.md) for the full
+design.
 
 ## Required permissions allowlist
 
