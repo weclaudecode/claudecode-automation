@@ -134,3 +134,29 @@ offending task) when any of the following hold:
 - A task header line uses syntax other than `## Task N: <title>`
 
 Failed validation produces no partial state — fix the plan and re-run.
+
+## Conversion regression test
+
+After changes to `/plan-format` or `plan-author`, exercise the fixtures:
+
+1. Install the kit into a sacrificial test target (e.g.,
+   `weclaudecode/claudecode-test-target`).
+2. Copy `docs/fixtures/freeform-plan-input.md` into the target's
+   `docs/fixtures/`.
+3. In a Claude Code session at the test target:
+   ```
+   /plan-format docs/fixtures/freeform-plan-input.md receipts
+   ```
+4. Provide `docs/receipts.md` when the gap-fill question asks about
+   task 5's `touches`.
+5. Confirm `ingest-plan.sh` exits 0 and the resulting state.json has:
+   - `total_tasks: 5`
+   - `auto_merge_overrides: {"4": false}` (task 4 mentions `infra/`
+     and IAM — flagged by the sensitive-pattern detector).
+6. Compare the output PLAN file's structure (not byte-for-byte) to
+   `docs/fixtures/expected-PLAN-99-freeform.md`.
+
+For the skill, trigger it with "design an orchestrator plan to ..."
+and confirm the produced PLAN passes ingest. The shape is necessarily
+less deterministic than the converter's, so verify only that ingest
+accepts the output.
