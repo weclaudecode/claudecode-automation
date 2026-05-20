@@ -7,7 +7,12 @@ You are interactively designing a new orchestrator plan with the user. Your outp
 
 ## Reference
 
-Read `orchestrator-kit/docs/PLAN-FORMAT.md` (or `docs/PLAN-FORMAT.md` in a target repo) for the canonical format spec. Do this first.
+Try to read the canonical format spec from one of these paths (use the first that exists):
+- `orchestrator-kit/docs/PLAN-FORMAT.md` (kit source repo)
+- `.claude/docs/PLAN-FORMAT.md` (if the kit installer was updated to copy it)
+- `docs/PLAN-FORMAT.md` (older install layouts)
+
+If none are found, do NOT abort. The format rules you need are summarized in the phases below — proceed using them. The format file is supplementary.
 
 ## Environment checks
 
@@ -48,6 +53,8 @@ If pending list is non-empty, emit ONE `AskUserQuestion`:
 - Group questions by task for clarity.
 
 Apply user's answers.
+
+**Low-confidence rule of thumb:** a field is low-confidence when there are 2+ plausible answers and no clear user hint in Phase 1-2 — for example, multiple files could plausibly be touched, or the dependency could go either way. Single-plausible-answer-with-evidence is confident.
 
 ### Phase 4 — Emit + validate
 
