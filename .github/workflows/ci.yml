@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Verification-only: workflow must never need write access.
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Run shellcheck
+        # Pre-existing warnings excluded so the workflow is green on day one.
+        # File follow-up issues to fix and remove each exclusion.
+        #   SC2164 — cd without `|| exit` (3 call sites in launch-worker.sh)
+        #   SC2011 — ls vs find -print0 (2 call sites for *.state.json globs;
+        #            safe today because plan filenames are PLAN-NN-slug.md)
+        # docs/archive/ is excluded entirely — frozen pre-fix-plan snapshot,
+        # not maintained code.
+        run: |
+          shellcheck -S warning -e SC2164 -e SC2011 \
+            $(find orchestrator-kit -type f -name "*.sh" -not -path "*/archive/*")
