@@ -44,6 +44,16 @@ If you would normally ask the user a question, instead apply the decision
 policy in `.claude/prompts/worker-superpower.md`. Never block on a question
 when running unattended.
 
+## Plan authoring helpers
+
+- `/plan-format <input> [slug]` — converts a freeform plan into a valid
+  `.claude/plans/PLAN-NN-<slug>.md` and validates via `ingest-plan.sh`.
+- `plan-author` skill — triggers on "design an orchestrator plan for
+  X"; walks goal → decomposition → emit + validate.
+
+Both refuse to clobber existing PLAN files and never commit. Format spec:
+`.claude/docs/PLAN-FORMAT.md`.
+
 ## Skills available
 
 (List any custom skills installed in this repo or globally that the worker
