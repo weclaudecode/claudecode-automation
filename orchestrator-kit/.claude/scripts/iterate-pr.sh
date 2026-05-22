@@ -144,9 +144,9 @@ if [ "$PRIOR_ITER" -ge "$ITER_CAP" ]; then
     exit 1
   }
 
-  if gh label list --repo "$REPO_OWNER_REPO" --search "orch:safety-block" 2>/dev/null | grep -q 'orch:safety-block'; then
-    gh pr edit "$PR_NUM" --repo "$REPO_OWNER_REPO" --add-label "orch:safety-block" >/dev/null 2>&1 \
-      || echo "iterate-pr: warning — failed to apply orch:safety-block label" >&2
+  if gh label list --repo "$REPO_OWNER_REPO" --search "orch:review-blocked" 2>/dev/null | grep -q 'orch:review-blocked'; then
+    gh pr edit "$PR_NUM" --repo "$REPO_OWNER_REPO" --add-label "orch:review-blocked" >/dev/null 2>&1 \
+      || echo "iterate-pr: warning — failed to apply orch:review-blocked label" >&2
   fi
 
   [ -x "$NOTIFY" ] && bash "$NOTIFY" "plan $PLAN_NUM task $TASK_NUM iter cap hit" \

@@ -10,7 +10,7 @@
 # Dependency map is read from state.json, not from issue body parsing —
 # the state file is the source of structured truth.
 
-set -euo pipefail
+set -uo pipefail
 
 command -v jq >/dev/null || { echo "refresh-deps: jq required" >&2; exit 1; }
 command -v gh >/dev/null || { echo "refresh-deps: gh required" >&2; exit 1; }
@@ -69,7 +69,8 @@ for task_num in $TASK_NUMS; do
   fi
 
   if [ "$ALL_CLOSED" = "true" ]; then
-    gh issue edit "$ISSUE_NUM" --repo "$REPO" --add-label "orch:deps-met" >/dev/null
+    gh issue edit "$ISSUE_NUM" --repo "$REPO" --add-label "orch:deps-met" >/dev/null \
+      || echo "refresh-deps: warning — failed to add orch:deps-met to issue #$ISSUE_NUM (continuing)" >&2
     echo "  task $task_num (#$ISSUE_NUM): deps satisfied → added orch:deps-met"
     ADDED=$((ADDED + 1))
   fi

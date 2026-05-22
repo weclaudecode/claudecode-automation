@@ -66,10 +66,12 @@ state_write() {
   echo "$$" > "$lockdir/pid"
 
   local rc=0
-  if jq "$@" "$jq_expr" "$state_file" > "$state_file.tmp" 2>/dev/null; then
+  local jq_err
+  if jq_err=$(jq "$@" "$jq_expr" "$state_file" 2>&1 > "$state_file.tmp"); then
     mv "$state_file.tmp" "$state_file"
   else
     rm -f "$state_file.tmp"
+    echo "state_write: jq failed on $state_file: $jq_err" >&2
     rc=1
   fi
 
