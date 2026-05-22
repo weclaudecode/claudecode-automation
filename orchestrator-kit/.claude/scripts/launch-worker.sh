@@ -241,9 +241,7 @@ fi
 rm -f /tmp/orch-push.$$.err
 
 # PR summary
-SUMMARY=$(jq -r '.[] | select(.type == "result") | .result // empty' "$RUN_OUT" 2>/dev/null \
-  | sed -n 's/.*"summary"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-  | head -1)
+SUMMARY=$(jq -r '.[] | select(.type == "result") | .result // empty | fromjson? | .summary // empty' "$RUN_OUT" 2>/dev/null | head -1)
 [ -z "$SUMMARY" ] && SUMMARY="Plan ${PLAN_NUM} / Task ${TASK_NUM} (auto)"
 
 # 5.7c: cap title at 80 chars; full summary stays in the body. Workers

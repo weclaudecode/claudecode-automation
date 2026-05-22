@@ -77,31 +77,23 @@ never commit on your behalf. See
 [`SPEC-plan-authoring.md`](docs/SPEC-plan-authoring.md) for the full
 design.
 
-## Required permissions allowlist
+## Permissions model
 
-The worker runs with `--permission-mode acceptEdits`, which only auto-accepts
-file edits. Bash commands (running tests, committing, filing follow-up
-issues) still go through the regular permission system. Without an allowlist
-the worker will stall on the first bash command, hit `--max-turns`, fail,
-retry 3×, and mark the plan blocked.
+Workers run with `--permission-mode bypassPermissions` — no prompts for
+Bash, file edits, or network. This is intentional: workers are unattended
+and stalling on a permission prompt would just trip `--max-turns`. Do not
+add a `permissions.allow` block; under bypass it has no effect.
 
-Add a `permissions.allow` block to `.claude/settings.json` alongside the
-existing `hooks` section. Tighten the list to your project's actual commands:
+Safety comes from the layers around the worker, not from sandboxing it:
 
-```json
-{
-  "permissions": {
-    "allow": [
-      "Bash(git add:*)", "Bash(git commit:*)", "Bash(git diff:*)",
-      "Bash(git status:*)", "Bash(git log:*)", "Bash(git rm:*)", "Bash(git mv:*)",
-      "Bash(pytest:*)", "Bash(uv:*)", "Bash(uv run:*)",
-      "Bash(pnpm:*)", "Bash(npm:*)", "Bash(npx:*)",
-      "Bash(gh issue create:*)", "Bash(gh issue list:*)"
-    ]
-  },
-  "hooks": { ... }
-}
-```
+- **Reviewer phase** (`review-pr.sh`) blocks PRs that contain `safety_block`
+  findings — IAM widenings, destructive migrations, secrets in diffs.
+- **Sensitive tasks** flagged at ingest time land in `auto_merge_overrides`
+  and skip `--auto`; merging requires a human.
+- **Iter cap** (`ORCH_MAX_TURNS`, retry limit) halts runaway workers.
+
+Run the orchestrator in a single repo with branch protection on `main`,
+not in a multi-tenant or shared-credential environment.
 
 ## Cost knobs
 
@@ -137,24 +129,30 @@ crontab -e
 
 1. Acquire lock (PID-aware; stale locks from crashed runs are auto-broken)
 2. Find oldest in-progress plan state file
-3. **Pending-PR gate:** if a previous tick recorded `pending_pr`, check its
-   merge state. If MERGED, clear it and advance `current_task`. If still
-   open, exit (don't start the next task off stale `main`). If CLOSED
-   unmerged, mark plan blocked and notify.
-4. Read current task number from state
-5. Create worktree on branch `claude/plan-NN-task-M`
-6. Spawn `claude -p` with the worker prompt + extracted task content
-7. Worker implements the task; Stop hook runs reviewer; iterates if needed
-8. On worker success: `git push`, then `gh pr create`
-9. If auto-merge eligible: `gh pr merge --auto` and record `pending_pr` —
-   next tick gates on its merge before continuing
-10. If sensitive-flagged: label `needs-robbie`, notify, advance state
-11. Remove worktree, release lock
+3. **Sweep-merges pass:** transition any `in_review` task whose PR has merged
+   to `merged`; mark plan-level blocked if a PR closed unmerged
+4. **Find-ready pass:** pick tasks whose `depends_on` are all `merged` and
+   whose `touches` don't collide with live `in_progress`/`in_review` siblings
+5. **Launch pass:** create worktree on `claude/plan-NN-task-M`, spawn
+   `claude -p` with the worker prompt + extracted task content, push, open PR,
+   transition task to `in_review` (auto-merge eligible PRs get `gh pr merge --auto`)
+6. **Review pass** (`review-pr.sh`): a fresh `claude -p` reviewer reads the PR
+   diff and posts findings; `safety_block` findings keep the task in `in_review`
+7. **Iterate pass** (`iterate-pr.sh`): for any `in_review` task with reviewer
+   findings, spawn a worker against the existing branch to address them;
+   hitting the iter cap transitions the task to `blocked`
+8. The Stop hook only smoke-checks that the worker produced a diff vs `main` —
+   it no longer drives review
+9. Release lock
 
-State file fields:
-- `current_task`, `total_tasks`, `retries_for_current`, `status`
-- `auto_merge_overrides` — map of task number → `false` for sensitive tasks
-- `pending_pr` — set when an auto-merge is in flight; cleared on next tick
+State file (v2 schema; `ingest-plan.sh` is the canonical source):
+- Top-level: `plan_file`, `total_tasks`, `status` (`in_progress` | `done` | `blocked`),
+  `auto_merge_overrides` (`{ "<task>": false }`), `auto_recommended`, `ingested_at`
+- Per-task under `tasks["<n>"]`: `title`, `depends_on`, `touches`, `issue`, `pr`,
+  `status`, `retries`, `max_turns`, and on block `blocked_at` + `blocked_reason`
+  (`worker_failed_3x` | `iterate_failed_3x` | `review_iter_cap` | `pr_closed_unmerged`
+  | `upstream_blocked_t<N>`); on merge `merged_at`
+- Per-task FSM: `pending → in_progress → in_review → merged` (any state → `blocked`)
 
 ## Files
 
@@ -214,13 +212,25 @@ jq '.status = "blocked"' .claude/plans/PLAN-01-*.state.json > /tmp/s && \
 After investigating and fixing whatever caused the block:
 
 ```bash
-# If a stuck pending_pr is the cause (PR was closed without merge), clear it:
-jq 'del(.pending_pr) | .status = "in_progress" | .retries_for_current = 0' \
+# Plan-level: flip back to in_progress so ticks resume
+jq '.status = "in_progress"' \
   .claude/plans/PLAN-01-*.state.json > /tmp/s && \
   mv /tmp/s .claude/plans/PLAN-01-*.state.json
 
-# Otherwise (worker hit retry limit):
-jq '.status = "in_progress" | .retries_for_current = 0' \
+# Reset a single blocked task (e.g. task 3) back to pending
+jq '.tasks["3"].status = "pending"
+    | .tasks["3"].retries = 0
+    | del(.tasks["3"].blocked_at, .tasks["3"].blocked_reason)' \
+  .claude/plans/PLAN-01-*.state.json > /tmp/s && \
+  mv /tmp/s .claude/plans/PLAN-01-*.state.json
+
+# Clear cascade blocks (tasks blocked only because an upstream was blocked)
+jq '.tasks |= with_entries(
+      if (.value.blocked_reason // "") | startswith("upstream_blocked_")
+      then .value.status = "pending"
+           | .value.retries = 0
+           | .value |= (del(.blocked_at, .blocked_reason))
+      else . end)' \
   .claude/plans/PLAN-01-*.state.json > /tmp/s && \
   mv /tmp/s .claude/plans/PLAN-01-*.state.json
 ```

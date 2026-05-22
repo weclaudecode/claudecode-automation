@@ -43,7 +43,7 @@ The phase 0 reproduction steps in `orchestrator-kit/docs/FIX-PLAN.md` are the cl
 
 ## Architecture: one orchestrator tick
 
-`orchestrator.sh` is a single-shot tick (cron or `/loop` invokes it). It is **idempotent and self-terminating**: every tick either advances state by exactly one task, waits, or no-ops. State lives entirely on disk under `.claude/`.
+`orchestrator.sh` is a single-shot tick (cron or `/loop` invokes it). It is **idempotent and self-terminating**: every tick walks a fixed sequence of phases against the active plan's state file, then exits. State lives entirely on disk under `.claude/`. Per-task transitions happen inside phases, not at the tick level.
 
 ```
                   cron / loop / manual
@@ -54,67 +54,95 @@ The phase 0 reproduction steps in `orchestrator-kit/docs/FIX-PLAN.md` are the cl
               │  (one tick)          │
               └──────────┬───────────┘
                          │
-   acquire lock (mkdir + PID liveness check; break stale)
+   Phase 0: acquire lock (mkdir + PID liveness; break stale)
+            mop up leaked worktrees from any prior killed tick
+            pick newest in_progress *.state.json (else idle)
                          │
-   find oldest in_progress *.state.json
+   Phase 1: refresh-deps.sh
+            for each pending task whose depends_on are all merged,
+            add orch:deps-met to its dep-issue (signals readiness)
                          │
-   pending_pr gate ────► MERGED?  → clear, advance current_task
-                         │         CLOSED unmerged? → mark blocked, notify
-                         │         else → exit (don't branch off stale main)
+   Phase 2: sweep-merges.sh
+            for each task in_review with a .pr set:
+              MERGED  → tasks.N.status = merged, close issue,
+                        fork post-merge-check.sh (CI watcher, disowned)
+              CLOSED  → tasks.N.status = blocked, label safety-block,
+                        cascade_block transitive pending dependents
+              OPEN    → no-op (handed off to review-pass)
                          │
-   extract current task from PLAN-NN-*.md (fence-aware awk)
+   Phase 3: review-pass.sh   (optional — only if executable)
+            for each in_review PR: rebase if CONFLICTING/BEHIND;
+            CI red → post synthetic blocker (orch:ci-gate-sha marker);
+            CI pending → defer; else if HEAD SHA != orch:review-sha,
+            spawn review-pr.sh in background (claude -p; SKIP_REVIEW=1)
                          │
-   git worktree add -B claude/plan-NN-task-M ../wt-planNN-tM origin/main
+   Phase 4: iterate-pass.sh  (optional — only if executable)
+            for each in_review PR with orch:review-blocked AND
+            (review-sha OR ci-gate-sha == HEAD): spawn iterate-pr.sh
                          │
-   claude -p WORKER_PROMPT --permission-mode acceptEdits --output-format json
+   Phase 5: launch-pass.sh
+            SLOTS = MAX_PARALLEL - count(in_review);
+            find-ready-tasks.sh emits up to SLOTS ready task numbers
+            (pending + deps merged + no touches-glob collision with
+            in-flight tasks); spawn launch-worker.sh per task in
+            background; wait on all PIDs
                          │
-                  (Stop hook fires)
+   each launch-worker.sh:
+     git worktree add -B claude/plan-NN-task-M ../wt-planNN-tM origin/main
+     register_worktree → claude -p (bypassPermissions, JSON) → push →
+     gh pr create → tasks.N.{pr,status:in_review} → unregister_worktree
                          │
-              ┌──────────────────────┐
-              │ stop-pre-push-       │
-              │ review.sh            │
-              │  → spawns sonnet     │
-              │    reviewer in fresh │
-              │    claude -p         │
-              └──────────┬───────────┘
+   Plan-completion check
+     all tasks terminal (merged | blocked)? → mark done or blocked,
+     archive plan + state file, notify
                          │
-            pass: true  →  exit 0 (worker stops)
-            pass: false + blockers → exit 2 (worker iterates)
+   Phase 6: plan-status.sh (dashboard refresh, best-effort)
                          │
-   worker exit 0 → git push → gh pr create
-                         │
-            auto-merge eligible? → gh pr merge --auto, record pending_pr
-                                   (next tick gates on its merge)
-            sensitive-flagged?  → label needs-robbie, notify, advance now
-                         │
-   release lock
+   release lock (trap also runs cleanup_active_worktrees)
 ```
 
 ### Key invariants
 
-- **One tick at a time, ever.** Lock is a directory containing a PID file. Stale locks (PID dead) are auto-broken; live ones cause the tick to no-op.
-- **Each task gets a fresh `claude -p` context.** No `--resume`. The plan + extracted task spec are re-sent every tick. Decisions persist via `.claude/state/decisions.md`, not session memory.
-- **Auto-merged tasks block subsequent ticks until merged.** When `gh pr merge --auto` is enabled, the tick writes `pending_pr: <PR#>` and exits without advancing. The next tick checks `gh pr view <PR#> --json state` before doing anything else. This prevents task N+1 from branching off stale `main` while task N is still merging.
-- **Sensitive-flagged tasks advance state immediately** (no `pending_pr`) because the operator merges them manually and subsequent tasks shouldn't wait on human review latency.
-- **The reviewer's own Stop event must not retrigger the hook.** `stop-pre-push-review.sh` sets `SKIP_REVIEW=1` before spawning the reviewer's `claude -p`. Don't remove this fence.
+- **One tick at a time, ever.** Lock is a directory containing a PID file. Stale locks (PID dead) are auto-broken; live ones cause the tick to no-op. The EXIT/INT/TERM trap also runs `cleanup_active_worktrees` so a killed tick doesn't leak `wt-planNN-tM/` directories.
+- **Each task gets a fresh `claude -p` context.** No `--resume`. The plan + extracted task spec are re-sent every spawn. Decisions persist via `.claude/state/decisions.md`, not session memory.
+- **All state.json writes go through `state_write` in `_dispatcher_lib.sh`.** Per-state-file mkdir lockdir (`<state>.lock.d`) with stale-PID break. Required because multiple workers, sweep/review/iterate phases, and the tick itself can all touch the same file concurrently when `MAX_PARALLEL > 1`.
+- **Tasks transition through a fixed FSM:** `pending → in_progress → in_review → merged` (happy path), with `blocked` reachable from any non-terminal status. Only `merged` and `blocked` are terminal; the plan-completion check archives when all tasks reach one of those.
+- **`find-ready-tasks.sh` enforces touches-collision exclusion** via Python `glob.glob(recursive=True)` against the worktree file list: a pending task whose touches expand to any path also touched by an `in_progress`/`in_review` task is held back. This is the only protection against two concurrent workers editing the same files; do not bypass it.
+- **A blocked task cascade-blocks its transitive pending dependents.** `cascade_block` in `_dispatcher_lib.sh` walks the reverse depends_on graph and writes `blocked_reason: upstream_blocked_t<N>` on every pending downstream. Without it, downstream tasks whose dep-issue never closes loop forever and the plan never archives. Cascade only touches `pending` tasks — never preempts a live worker's `in_progress`/`in_review` row.
+- **Sensitive-flagged tasks (`auto_merge_overrides[N] == false`) get `orch:needs-robbie` and stay in `in_review`** until the operator merges by hand; sweep-merges then transitions them like any other PR.
+- **The reviewer never re-triggers the Stop hook.** Reviewers and iterators now run in their own `claude -p` calls from `review-pr.sh`/`iterate-pr.sh` (spawned by the phase scripts), not from the Stop hook. The hook's `SKIP_REVIEW=1` fence is still set on those spawns as belt-and-braces against future reintroduction of hook-driven review.
 
 ## State files at a glance
 
-`.claude/plans/PLAN-NN-slug.state.json` is the canonical task pointer:
+`.claude/plans/PLAN-NN-slug.state.json` is the canonical plan record. Schema v2 (the only schema the kit reads or writes):
 
 ```json
 {
   "plan_file": ".claude/plans/PLAN-01-foo.md",
-  "current_task": 3,
   "total_tasks": 7,
-  "retries_for_current": 0,
-  "status": "in_progress",            // in_progress | blocked | done
-  "auto_merge_overrides": {"5": false},  // task → false to disable auto-merge
-  "pending_pr": 142                    // present iff an --auto merge is in flight
+  "status": "in_progress",            // in_progress | done | blocked
+  "tasks": {
+    "1": {
+      "title": "...",
+      "depends_on": [],                // task numbers this one waits on
+      "touches": ["path/**", "..."],   // gitignore-syntax globs
+      "issue": 41,                     // null until refresh-deps opens it
+      "pr": 142,                       // null until launch-worker pushes
+      "status": "pending",             // pending | in_progress | in_review | merged | blocked
+      "retries": 0,                    // bumped by iterate-pass on re-runs
+      "max_turns": null,               // override claude -p --max-turns
+      "blocked_at": "<iso8601>",       // set when status -> blocked
+      "blocked_reason": "worker_failed_3x" // | review_iter_cap | pr_closed_unmerged | upstream_blocked_t<N>
+      // "merged_at": "<iso8601>" set when status -> merged
+    }
+  },
+  "auto_merge_overrides": {"5": false}, // task → false to disable auto-merge (sensitive flag)
+  "auto_recommended": false,            // per-plan override of ORCH_AUTO_RECOMMENDED
+  "ingested_at": "<iso8601>"
 }
 ```
 
-`status: blocked` halts the loop until manually edited back to `in_progress`. Three consecutive worker failures auto-block (worktree preserved for inspection). `pending_pr` closed unmerged also auto-blocks.
+Plan-level `status: blocked` only appears at archive time when no tasks merged (see `orchestrator.sh` completion check). A task with `status: blocked` halts only its own dependency subtree; the rest of the plan continues. Three consecutive worker failures on the same task auto-block it (`blocked_reason: worker_failed_3x`, worktree preserved for inspection).
 
 ## Hard dependencies (will silently break things if missing)
 
