@@ -1,0 +1,22 @@
+{
+  "plan_file": ".claude/plans/PLAN-01-test.md",
+  "total_tasks": 1,
+  "status": "in_progress",
+  "tasks": {
+    "3": {
+      "title": "Test task — worker failed 3x, decisions ARE present in window",
+      "depends_on": [],
+      "touches": [],
+      "issue": 30,
+      "pr": null,
+      "status": "blocked",
+      "retries": 3,
+      "max_turns": null,
+      "blocked_at": "2026-01-15T12:00:00Z",
+      "blocked_reason": "worker_failed_3x"
+    }
+  },
+  "auto_merge_overrides": {},
+  "auto_recommended": false,
+  "ingested_at": "2026-01-14T00:00:00Z"
+}

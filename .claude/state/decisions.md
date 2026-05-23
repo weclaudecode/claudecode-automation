@@ -14,3 +14,10 @@ Format:
 ```
 
 ---
+
+## 2026-05-23 00:00 — Plan 02 Task 3
+**Decision:** Modified `test_monitor_sweep.sh` (outside task's touches list) to add explicit H2 test block
+**Severity:** routine
+**Recommended option:** n/a
+**Reason:** H2 fixture prefix (`h2`) differs from heuristic name (`h2_silent_block`) so auto-discovery skips it; also `DECISIONS_FILE` env must be set per test run — both require explicit test code like the H1 section
+**Reversible:** yes
