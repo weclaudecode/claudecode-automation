@@ -133,6 +133,25 @@ run_heuristic "$SCRIPTS_DIR/_heuristics/h1_stuck_needs_robbie.sh" \
   "$FIXTURES_DIR/h1_negative.json"
 assert_no_finding "H1-PR99"
 
+# ── H2: silent worker-failed-3x detector ──
+# Tested explicitly because the fixture prefix ("h2") differs from the heuristic
+# filename ("h2_silent_block"), and because $DECISIONS_FILE must be pointed at
+# the fixture .md files rather than the real .claude/state/decisions.md.
+echo "--- h2_silent_block positive ---"
+export DECISIONS_FILE="$FIXTURES_DIR/h2_decisions_empty.md"
+run_heuristic "$SCRIPTS_DIR/_heuristics/h2_silent_block.sh" \
+  "$FIXTURES_DIR/h2_positive.json"
+unset DECISIONS_FILE
+assert_finding "H2-PLAN01-T3"
+FIXTURE_TESTS_RUN=$((FIXTURE_TESTS_RUN + 1))
+
+echo "--- h2_silent_block negative ---"
+export DECISIONS_FILE="$FIXTURES_DIR/h2_decisions_active.md"
+run_heuristic "$SCRIPTS_DIR/_heuristics/h2_silent_block.sh" \
+  "$FIXTURES_DIR/h2_negative.json"
+unset DECISIONS_FILE
+assert_no_finding "H2-PLAN01-T3"
+
 # ── Summary ──
 if [ "$TESTS_FAILED" -gt 0 ]; then
   echo "RESULT: $TESTS_FAILED failure(s) (fixture tests run: $FIXTURE_TESTS_RUN)" >&2
