@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>orchestrator dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">orchestrator</div>
+    <div class="plan-summary" id="plan-summary">
+      <span class="slug" id="header-slug">no active plan</span>
+      <span class="sep">·</span>
+      <span class="tick" id="header-tick">tick —</span>
+    </div>
+    <div class="controls">
+      <button id="pause-toggle" type="button" aria-pressed="false">pause polling</button>
+      <span class="status" id="poll-status">polling every 5s</span>
+    </div>
+  </header>
+
+  <main class="grid">
+    <section data-panel="plan">
+      <header>
+        <h2>plan status</h2>
+        <div class="meta">
+          <span class="updated" data-updated>—</span>
+          <button class="refresh" type="button" data-refresh>refresh</button>
+        </div>
+      </header>
+      <div class="content"><p class="loading">loading…</p></div>
+    </section>
+
+    <section data-panel="logs">
+      <header>
+        <h2>logs</h2>
+        <div class="meta">
+          <span class="updated" data-updated>—</span>
+          <button class="refresh" type="button" data-refresh>refresh</button>
+        </div>
+      </header>
+      <div class="content"><p class="loading">loading…</p></div>
+    </section>
+
+    <section data-panel="github">
+      <header>
+        <h2>issues + PRs</h2>
+        <div class="meta">
+          <span class="updated" data-updated>—</span>
+          <button class="refresh" type="button" data-refresh>refresh</button>
+        </div>
+      </header>
+      <div class="content"><p class="loading">loading…</p></div>
+    </section>
+
+    <section data-panel="workers">
+      <header>
+        <h2>workers</h2>
+        <div class="meta">
+          <span class="updated" data-updated>—</span>
+          <button class="refresh" type="button" data-refresh>refresh</button>
+        </div>
+      </header>
+      <div class="content"><p class="loading">loading…</p></div>
+    </section>
+
+    <section data-panel="config">
+      <header>
+        <h2>config</h2>
+        <div class="meta">
+          <span class="updated" data-updated>—</span>
+          <button class="refresh" type="button" data-refresh>refresh</button>
+        </div>
+      </header>
+      <div class="content"><p class="loading">loading…</p></div>
+    </section>
+  </main>
+
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>
