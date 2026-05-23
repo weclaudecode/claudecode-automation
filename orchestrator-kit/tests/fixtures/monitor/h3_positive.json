@@ -1,0 +1,20 @@
+{
+  "plan_file": ".claude/plans/PLAN-01-test.md",
+  "total_tasks": 10,
+  "status": "in_progress",
+  "tasks": {
+    "1":  { "title": "Task 1 — merged",    "depends_on": [], "touches": [], "issue": 11, "pr": 101, "status": "merged",    "retries": 0, "max_turns": null, "merged_at":  "2026-05-18T10:00:00Z" },
+    "2":  { "title": "Task 2 — in_review", "depends_on": [], "touches": [], "issue": 12, "pr": 102, "status": "in_review", "retries": 0, "max_turns": null },
+    "3":  { "title": "Task 3 — in_review", "depends_on": [], "touches": [], "issue": 13, "pr": 103, "status": "in_review", "retries": 0, "max_turns": null },
+    "4":  { "title": "Task 4 — pending",   "depends_on": [], "touches": [], "issue": 14, "pr": null, "status": "pending",   "retries": 0, "max_turns": null },
+    "5":  { "title": "Task 5 — pending",   "depends_on": [], "touches": [], "issue": 15, "pr": null, "status": "pending",   "retries": 0, "max_turns": null },
+    "6":  { "title": "Task 6 — pending",   "depends_on": [], "touches": [], "issue": 16, "pr": null, "status": "pending",   "retries": 0, "max_turns": null },
+    "7":  { "title": "Task 7 — pending",   "depends_on": [], "touches": [], "issue": 17, "pr": null, "status": "pending",   "retries": 0, "max_turns": null },
+    "8":  { "title": "Task 8 — pending",   "depends_on": [], "touches": [], "issue": 18, "pr": null, "status": "pending",   "retries": 0, "max_turns": null },
+    "9":  { "title": "Task 9 — blocked",   "depends_on": [], "touches": [], "issue": 19, "pr": null, "status": "blocked",   "retries": 3, "max_turns": null, "blocked_at": "2026-05-16T08:00:00Z", "blocked_reason": "worker_failed_3x" },
+    "10": { "title": "Task 10 — blocked",  "depends_on": [], "touches": [], "issue": 20, "pr": null, "status": "blocked",   "retries": 3, "max_turns": null, "blocked_at": "2026-05-17T08:00:00Z", "blocked_reason": "upstream_blocked_t9" }
+  },
+  "auto_merge_overrides": {},
+  "auto_recommended": false,
+  "ingested_at": "2026-05-15T00:00:00Z"
+}
