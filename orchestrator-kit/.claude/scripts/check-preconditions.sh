@@ -11,6 +11,7 @@
 # Required (exit 1 if missing):
 #   - main has branch protection
 #   - branch protection requires at least one status check context
+#   - repo has allow_auto_merge enabled (gh pr merge --auto needs it)
 #
 # Warning (non-blocking):
 #   - no required PR reviews: auto-merge will merge unreviewed PRs;
@@ -68,4 +69,29 @@ fi
 
 CHECK_NAMES=$(echo "$PROT" | jq -r '.required_status_checks.contexts | join(", ")')
 echo "OK: $REPO main has $CHECKS required check(s): $CHECK_NAMES"
+
+# Repo-level allow_auto_merge must be true. `gh repo edit --enable-auto-merge`
+# is known to silently no-op on some gh versions / repo states, so we read
+# the resulting setting via the API rather than trusting the enable command.
+AM_OUTPUT=$(gh api "repos/$REPO" --jq '.allow_auto_merge' 2>&1)
+AM_EXIT=$?
+
+if [ $AM_EXIT -ne 0 ]; then
+  echo "FAIL: could not read allow_auto_merge for $REPO" >&2
+  echo "$AM_OUTPUT" | sed 's/^/  /' >&2
+  exit 1
+fi
+
+if [ "$AM_OUTPUT" != "true" ]; then
+  echo "FAIL: $REPO has allow_auto_merge=$AM_OUTPUT (must be true)" >&2
+  echo "  gh pr merge --auto silently no-ops without this; the orchestrator" >&2
+  echo "  loop will stall on every PR until a human merges it." >&2
+  echo "  fix:" >&2
+  echo "    gh api repos/$REPO -X PATCH -f allow_auto_merge=true \\" >&2
+  echo "      --jq '.allow_auto_merge'" >&2
+  echo "  (expect 'true' on stdout; re-run this script to confirm)" >&2
+  exit 1
+fi
+
+echo "OK: $REPO has allow_auto_merge=true"
 exit 0

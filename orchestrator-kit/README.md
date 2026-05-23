@@ -22,6 +22,23 @@ brew install gh jq gawk     # macOS — gawk is required
 # claude install: see https://docs.claude.com/en/docs/claude-code/setup
 ```
 
+### Enable repo-level auto-merge (required)
+
+`gh pr merge --auto` only works when the repo has `allow_auto_merge=true`.
+Some `gh` versions accept `gh repo edit --enable-auto-merge` and exit 0
+without actually flipping the flag, which leaves the orchestrator stuck on
+every PR. Use the API directly and assert the result:
+
+```bash
+gh api "repos/<owner>/<repo>" -X PATCH -f allow_auto_merge=true \
+  --jq '.allow_auto_merge' | grep -qx true \
+  || { echo "allow_auto_merge did not enable" >&2; exit 1; }
+```
+
+After install, run `.claude/scripts/check-preconditions.sh` from the target
+repo — it verifies branch protection, required checks, and
+`allow_auto_merge` together and exits non-zero if any of them are off.
+
 ## Install into a repo
 
 From your repo root:
