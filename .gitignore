@@ -19,3 +19,10 @@
 /.claude/state/post-merge-pr*.log
 /.claude/state/active_worktrees.txt
 /.claude/state/tick-wrapper.log
+
+# Orchestrator plan runtime state — written and updated by workers each
+# tick; should never be tracked. The plan markdowns under .claude/plans/
+# stay tracked (operator-authored content), only the state files are
+# excluded.
+.claude/plans/*.state.json
+.claude/plans/archive/*.state.json
