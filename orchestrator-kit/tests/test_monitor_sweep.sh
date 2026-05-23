@@ -219,6 +219,26 @@ run_heuristic "$SCRIPTS_DIR/_heuristics/h6_test_fail_pr.sh" \
   "$FIXTURES_DIR/h6_run_negative.json"
 assert_no_finding "H6-T2-R0"
 
+# ── H7: sensitive-decisions audit detector ──
+# Tested explicitly because the fixture prefix ("h7_decisions") differs from
+# the heuristic filename ("h7_sensitive_decisions"), so auto-discovery skips it,
+# and because DECISIONS_FILE must be pointed at the fixture .md files.
+# Uses h1_positive.json as STATE_FILE (plan_file = PLAN-01-test.md → PLAN01).
+echo "--- h7_sensitive_decisions positive ---"
+export DECISIONS_FILE="$FIXTURES_DIR/h7_decisions_positive.md"
+run_heuristic "$SCRIPTS_DIR/_heuristics/h7_sensitive_decisions.sh" \
+  "$FIXTURES_DIR/h1_positive.json"
+unset DECISIONS_FILE
+assert_finding "H7-PLAN01"
+FIXTURE_TESTS_RUN=$((FIXTURE_TESTS_RUN + 1))
+
+echo "--- h7_sensitive_decisions negative ---"
+export DECISIONS_FILE="$FIXTURES_DIR/h7_decisions_negative.md"
+run_heuristic "$SCRIPTS_DIR/_heuristics/h7_sensitive_decisions.sh" \
+  "$FIXTURES_DIR/h1_positive.json"
+unset DECISIONS_FILE
+assert_no_finding "H7-PLAN01"
+
 # ── Summary ──
 if [ "$TESTS_FAILED" -gt 0 ]; then
   echo "RESULT: $TESTS_FAILED failure(s) (fixture tests run: $FIXTURE_TESTS_RUN)" >&2
