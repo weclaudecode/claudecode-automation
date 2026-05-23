@@ -187,6 +187,38 @@ run_heuristic "$SCRIPTS_DIR/_heuristics/h5_deadlock.sh" \
 unset LOG_FILE
 assert_no_finding "H5-PLAN01-RECENT"
 
+# ── H4: reviewer-flake detector ──
+# Tested explicitly because the fixture prefix ("h4_reviews") differs from the
+# heuristic filename ("h4_reviewer_flake"), so auto-discovery skips it.
+# Positive: PR 99, 3 reviews on SHA abc1234 with alternating verdicts → H4-PR99-SHAabc1234.
+# Negative: PR 99, only 2 reviews on same SHA → no fire.
+echo "--- h4_reviewer_flake positive ---"
+run_heuristic "$SCRIPTS_DIR/_heuristics/h4_reviewer_flake.sh" \
+  "$FIXTURES_DIR/h4_reviews_positive.json"
+assert_finding "H4-PR99-SHAabc1234"
+FIXTURE_TESTS_RUN=$((FIXTURE_TESTS_RUN + 1))
+
+echo "--- h4_reviewer_flake negative ---"
+run_heuristic "$SCRIPTS_DIR/_heuristics/h4_reviewer_flake.sh" \
+  "$FIXTURES_DIR/h4_reviews_negative.json"
+assert_no_finding "H4-PR99-SHAabc1234"
+
+# ── H6: test-fail PR detector ──
+# Tested explicitly because the fixture prefix ("h6_run") differs from the
+# heuristic filename ("h6_test_fail_pr"), so auto-discovery skips it.
+# Positive: task 2 completed with tests_result=fail and has PR 55 → H6-T2-R0.
+# Negative: task 2 completed with tests_result=pass → no fire.
+echo "--- h6_test_fail_pr positive ---"
+run_heuristic "$SCRIPTS_DIR/_heuristics/h6_test_fail_pr.sh" \
+  "$FIXTURES_DIR/h6_run_positive.json"
+assert_finding "H6-T2-R0"
+FIXTURE_TESTS_RUN=$((FIXTURE_TESTS_RUN + 1))
+
+echo "--- h6_test_fail_pr negative ---"
+run_heuristic "$SCRIPTS_DIR/_heuristics/h6_test_fail_pr.sh" \
+  "$FIXTURES_DIR/h6_run_negative.json"
+assert_no_finding "H6-T2-R0"
+
 # ── Summary ──
 if [ "$TESTS_FAILED" -gt 0 ]; then
   echo "RESULT: $TESTS_FAILED failure(s) (fixture tests run: $FIXTURE_TESTS_RUN)" >&2

@@ -27,6 +27,20 @@ Format:
 **Recommended option:** n/a
 **Reason:** H5 only reads STATE_FILE for the body (plan_file + in_review tasks); no new fixture reduces fixture sprawl; h1_positive.json already has both needed fields
 
+## 2026-05-23 10:00 — Plan 02 Task 5
+**Decision:** H4 uses `_test_reviews_fixture` keyed by PR number (same pattern as H1's `_test_pr_fixtures`); H6 uses `_test_run_fixtures` array in STATE_FILE (same in-fixture stub approach)
+**Severity:** routine
+**Recommended option:** n/a
+**Reason:** Embedding test data in STATE_FILE avoids filesystem fixtures for API-backed heuristics; consistent with H1 pattern documented in h1's header comment
+**Reversible:** yes
+
+## 2026-05-23 10:01 — Plan 02 Task 5
+**Decision:** H6 verdict-list python uses `"  " + r.get("state", "?")` string concatenation instead of f-string `f"  {r.get('state', '?')}"` to avoid shellcheck parsing ambiguity with curly braces in heredoc
+**Severity:** routine
+**Recommended option:** n/a
+**Reason:** Shellcheck's heredoc parser can misread `{` inside `$()` heredoc bodies; concatenation is functionally identical and avoids the parse error
+**Reversible:** yes
+
 ## 2026-05-23 00:00 — Plan 02 Task 3
 **Decision:** Modified `test_monitor_sweep.sh` (outside task's touches list) to add explicit H2 test block
 **Severity:** routine
