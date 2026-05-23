@@ -118,6 +118,21 @@ for positive in "$FIXTURES_DIR"/*_positive.json; do
   FIXTURE_TESTS_RUN=$((FIXTURE_TESTS_RUN + 1))
 done
 
+# ── H1: stuck orch:needs-robbie PR detector ──
+# Tested explicitly because the fixture name prefix ("h1") differs from the
+# heuristic filename ("h1_stuck_needs_robbie"), so the auto-discovery loop
+# above skips it. The expected finding hash is "H1-PR99" (PR number embedded).
+echo "--- h1_stuck_needs_robbie positive ---"
+run_heuristic "$SCRIPTS_DIR/_heuristics/h1_stuck_needs_robbie.sh" \
+  "$FIXTURES_DIR/h1_positive.json"
+assert_finding "H1-PR99"
+FIXTURE_TESTS_RUN=$((FIXTURE_TESTS_RUN + 1))
+
+echo "--- h1_stuck_needs_robbie negative ---"
+run_heuristic "$SCRIPTS_DIR/_heuristics/h1_stuck_needs_robbie.sh" \
+  "$FIXTURES_DIR/h1_negative.json"
+assert_no_finding "H1-PR99"
+
 # ── Summary ──
 if [ "$TESTS_FAILED" -gt 0 ]; then
   echo "RESULT: $TESTS_FAILED failure(s) (fixture tests run: $FIXTURE_TESTS_RUN)" >&2
