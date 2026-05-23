@@ -15,6 +15,7 @@ pre-push review and conditional auto-merge.
   auto-merge.
 - A GitHub repo with `main` branch and branch protection allowing `--auto` merges
 - Optional: cron / launchd for scheduled triggers
+- Optional: `python3 >= 3.11` — only needed if you use the [local dashboard](docs/DASHBOARD.md)
 
 ```bash
 brew install gh jq gawk     # macOS — gawk is required
@@ -65,6 +66,9 @@ cat >> .gitignore <<'EOF'
 .claude/state/run-*.json
 .claude/state/post-merge-pr*.log
 .claude/state/active_worktrees.txt
+.claude/state/dashboard.pid
+.claude/state/dashboard-venv/
+.claude/state/dashboard.log
 EOF
 ```
 
@@ -121,6 +125,7 @@ Two env vars override defaults (set in your cron line or shell profile):
 | `ORCH_WORKER_MODEL`  | `sonnet` | Set to `opus` for plans known to need stronger reasoning |
 | `ORCH_MAX_TURNS`     | `30`     | Reviewer-block iterations × ~3 turns each                |
 | `ORCH_LOG_MAX_BYTES` | `10485760` | Log rotation threshold (default 10 MiB)                |
+| `ORCH_DASHBOARD_PORT`| `5174`   | Port the optional [local dashboard](docs/DASHBOARD.md) binds to (127.0.0.1 only) |
 
 ## First run
 
@@ -141,6 +146,21 @@ cat .claude/plans/PLAN-01-my-feature.state.json
 crontab -e
 # Add: */5 * * * * cd /path/to/repo && ./orchestrator.sh >> .claude/state/orchestrator.log 2>&1
 ```
+
+## Local dashboard
+
+Optional read-only Flask UI at `http://127.0.0.1:5174/` showing plan
+status, log tail, GitHub issues/PRs, active workers, and effective
+config:
+
+```bash
+./.claude/scripts/dashboard.sh start    # creates venv on first run
+./.claude/scripts/dashboard.sh status
+./.claude/scripts/dashboard.sh stop
+```
+
+Localhost-only, no auth, single-operator tool. Full reference:
+[`docs/DASHBOARD.md`](docs/DASHBOARD.md).
 
 ## What each tick does
 
