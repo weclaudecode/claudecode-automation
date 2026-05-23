@@ -182,13 +182,14 @@ if [ "$ALL_TERMINAL" = "true" ]; then
 
   echo "plan $PLAN_NUM terminal: $MERGED_COUNT merged, $BLOCKED_COUNT blocked; marking $FINAL_STATUS and archiving"
 
-  state_write "$STATE_FILE" --arg s "$FINAL_STATUS" '.status = $s | .completed_at = (now | todateiso8601)' \
-    || echo "warning: failed to mark plan $FINAL_STATUS in state file" >&2
-
-  mv "$PLAN_FILE" .claude/plans/archive/ 2>/dev/null || \
-    echo "warning: could not move plan file to archive (already moved?)" >&2
-  mv "$STATE_FILE" .claude/plans/archive/ 2>/dev/null || \
-    echo "warning: could not move state file to archive (already moved?)" >&2
+  if state_write "$STATE_FILE" '.status = $s | .completed_at = (now | todateiso8601)' --arg s "$FINAL_STATUS"; then
+    mv "$PLAN_FILE" .claude/plans/archive/ 2>/dev/null || \
+      echo "warning: could not move plan file to archive (already moved?)" >&2
+    mv "$STATE_FILE" .claude/plans/archive/ 2>/dev/null || \
+      echo "warning: could not move state file to archive (already moved?)" >&2
+  else
+    echo "warning: failed to mark plan $FINAL_STATUS in state file — NOT archiving so operator can investigate" >&2
+  fi
 
   if [ "$FINAL_STATUS" = "blocked" ]; then
     bash "$NOTIFY" "plan $PLAN_NUM blocked" \
