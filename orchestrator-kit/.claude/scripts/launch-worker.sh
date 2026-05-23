@@ -72,7 +72,11 @@ RETRIES=$(jq -r --arg t "$TASK_NUM" '.tasks[$t].retries // 0' "$STATE_FILE")
 PLAN_BASE=$(basename "$PLAN_FILE" .md)
 PLAN_NUM=$(echo "$PLAN_BASE" | grep -oE 'PLAN-[0-9]+' | grep -oE '[0-9]+' || echo "00")
 
-AUTO_MERGE=$(jq -r --arg t "$TASK_NUM" '.auto_merge_overrides[$t] // true' "$STATE_FILE")
+# jq's `//` operator treats both `null` AND `false` as "use the RHS default",
+# so `.auto_merge_overrides[$t] // true` silently flips a `false` override back
+# to `true` — exactly the opposite of what sensitive-flag operators want.
+# Use an explicit `== false` check instead so only a literal false disables.
+AUTO_MERGE=$(jq -r --arg t "$TASK_NUM" 'if .auto_merge_overrides[$t] == false then "false" else "true" end' "$STATE_FILE")
 
 # Auto-recommended precedence: state.auto_recommended (per-plan) > env var > 0.
 # Per-plan override (Task 3.4) lets an operator opt one experimental plan
