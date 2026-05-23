@@ -111,8 +111,16 @@ above prescribe — escalate on ambiguity.
 ## Scope discipline
 
 - If you spot a bug or improvement outside the task: file a GitHub issue
-  via `gh issue create --label agent-followup` and continue. Do not fix it
-  in this task.
+  via `.claude/scripts/file-followup.sh "<title>" "<body>"` and continue.
+  Do not fix it in this task. The helper hashes the normalised title and
+  searches for an existing open `agent-followup` issue with that hash; on
+  a match it adds a "re-encountered" comment to the existing issue instead
+  of filing a new one, so retries of the same task don't duplicate follow-ups.
+  Prefer this helper over calling `gh issue create --label agent-followup`
+  directly. If the helper exits non-zero (network/auth/label missing),
+  continue with the primary task rather than aborting — record the failure
+  in your summary JSON's `followup_issues_filed` field (e.g.
+  `["error: file-followup.sh failed for <title>"]`) so the operator sees it.
 - If a step turns out to be wrong, fix the step's intent (the plan is
   guidance, not contract). Note the deviation in decisions.md.
 - If acceptance criteria are unattainable as written: stop, report what's

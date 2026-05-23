@@ -221,6 +221,21 @@ if [ "$CLAUDE_EXIT" = "124" ] && [ -n "$TIMEOUT_CMD" ]; then
   echo "review-pr: reviewer exceeded ${REVIEWER_TIMEOUT}s timeout — treating as failure" >&2
 fi
 
+# Capture reviewer usage. Runs on every reviewer invocation including
+# failed ones — reviewer costs are real and operator visibility matters.
+# Safe before the exit check because extract_usage_summary returns empty
+# (and exits 0) when the run JSON is malformed or missing.
+USAGE_LINE=$(extract_usage_summary "$RUN_OUT")
+if [ -n "$USAGE_LINE" ]; then
+  echo "review-pr: usage [reviewer iter $NEW_ITER sha ${HEAD_OID:0:8}] $USAGE_LINE"
+  if [ -n "${STATE_FILE:-}" ] && [ -n "${TASK_NUM:-}" ] && [ -f "$STATE_FILE" ]; then
+    update_task_usage "$STATE_FILE" "$TASK_NUM" "$RUN_OUT" reviewer || \
+      echo "review-pr: warning — failed to persist usage to state" >&2
+  fi
+  gh pr comment "$PR_NUM" --body "**Usage** (reviewer, iter $NEW_ITER, sha \`${HEAD_OID:0:8}\`): \`$USAGE_LINE\`" >/dev/null 2>&1 || \
+    echo "review-pr: warning — failed to post usage comment to PR #$PR_NUM" >&2
+fi
+
 if [ $CLAUDE_EXIT -ne 0 ]; then
   echo "review-pr: claude -p exited $CLAUDE_EXIT" >&2
   echo "review-pr: tail of output:" >&2
