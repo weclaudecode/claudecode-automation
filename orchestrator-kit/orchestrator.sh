@@ -130,6 +130,17 @@ echo "--- phase 2: sweep merges ---"
 bash .claude/scripts/sweep-merges.sh "$STATE_FILE" "$REPO_OWNER_REPO" || \
   echo "warning: sweep-merges exited non-zero (continuing)" >&2
 
+# ---- Phase 2.5: retry stuck auto-merges (optional) ----
+# Recovers PRs labelled orch:needs-robbie from launch-worker.sh's failed
+# `gh pr merge --auto` (recoverable misconfig or transient gh blip).
+# Guarded with `if [ -x ... ]` so older installs without the script stay
+# backward-compatible. Numbered 2.5 to preserve original 1/2/3/4/5 logs.
+if [ -x .claude/scripts/retry-auto-merge.sh ]; then
+  echo "--- phase 2.5: retry auto-merge ---"
+  bash .claude/scripts/retry-auto-merge.sh "$STATE_FILE" "$REPO_OWNER_REPO" || \
+    echo "warning: retry-auto-merge exited non-zero (continuing)" >&2
+fi
+
 # ---- Phase 3: review pass (optional) ----
 if [ -x .claude/scripts/review-pass.sh ]; then
   echo "--- phase 3: review pass ---"

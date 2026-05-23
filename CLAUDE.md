@@ -70,6 +70,12 @@ The phase 0 reproduction steps in `orchestrator-kit/docs/FIX-PLAN.md` are the cl
                         cascade_block transitive pending dependents
               OPEN    → no-op (handed off to review-pass)
                          │
+   Phase 2.5: retry-auto-merge.sh   (optional — only if executable)
+            for each in_review task whose PR has orch:needs-robbie
+            (and not orch:safety-block, and auto_merge_overrides[N] != false):
+            retry `gh pr merge --auto --squash --delete-branch`;
+            on success strip orch:needs-robbie, on failure leave labelled
+                         │
    Phase 3: review-pass.sh   (optional — only if executable)
             for each in_review PR: rebase if CONFLICTING/BEHIND;
             CI red → post synthetic blocker (orch:ci-gate-sha marker);
