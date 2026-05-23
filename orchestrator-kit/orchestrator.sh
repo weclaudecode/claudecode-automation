@@ -111,7 +111,14 @@ if [ -z "$REPO_OWNER_REPO" ]; then
   exit 1
 fi
 
-echo "plan: $PLAN_FILE  total: $TOTAL  max_parallel: $MAX_PARALLEL  auto_recommended: $AUTO_RECOMMENDED  repo: $REPO_OWNER_REPO"
+# Resolve the effective auto_recommended value workers will see for this
+# plan: state.auto_recommended (per-plan) > $ORCH_AUTO_RECOMMENDED > 0.
+# $AUTO_RECOMMENDED above is just the env-var default; the per-plan
+# override can flip it, so log the resolved value to avoid misleading
+# tick headers (issue #2).
+EFFECTIVE_AUTO_RECOMMENDED=$(resolve_auto_recommended "$STATE_FILE")
+
+echo "plan: $PLAN_FILE  total: $TOTAL  max_parallel: $MAX_PARALLEL  auto_recommended: $EFFECTIVE_AUTO_RECOMMENDED  repo: $REPO_OWNER_REPO"
 
 # ---- Phase 1: refresh deps ----
 echo "--- phase 1: refresh deps ---"

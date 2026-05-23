@@ -289,6 +289,30 @@ PY
   return 0
 }
 
+# ---- resolve_auto_recommended ----
+# Echo the effective AUTO_RECOMMENDED value ("0" or "1") that workers
+# will see for a given plan's state file. Precedence:
+#   state.auto_recommended (per-plan, true|false)
+#     > $ORCH_AUTO_RECOMMENDED (env var)
+#     > built-in default 0
+#
+# Uses jq's `has()` check rather than `// empty` because jq's `//` triggers
+# on `false` as well as `null` — a per-plan `false` would otherwise fall
+# through to the env var. Same trap previously fixed at launch-worker.sh.
+#
+# Returns:
+#   0 — always (prints "0" or "1" to stdout)
+resolve_auto_recommended() {
+  local state_file="$1"
+  local plan_val
+  plan_val=$(jq -r 'if has("auto_recommended") then .auto_recommended else "" end' "$state_file" 2>/dev/null)
+  case "$plan_val" in
+    true)  echo 1 ;;
+    false) echo 0 ;;
+    *)     echo "${ORCH_AUTO_RECOMMENDED:-0}" ;;
+  esac
+}
+
 # ---- find_timeout_cmd ----
 # Print the path to a timeout(1) binary, or empty string if none is
 # available. Callers should fall back to running without a timeout (with
