@@ -1,0 +1,23 @@
+{
+  "plan_file": ".claude/plans/PLAN-01-test.md",
+  "total_tasks": 1,
+  "status": "in_progress",
+  "tasks": {
+    "2": {
+      "title": "Test task — in_review with a failing-tests run",
+      "depends_on": [],
+      "touches": [],
+      "issue": 20,
+      "pr": 55,
+      "status": "in_review",
+      "retries": 1,
+      "max_turns": null
+    }
+  },
+  "auto_merge_overrides": {},
+  "auto_recommended": false,
+  "ingested_at": "2026-01-01T00:00:00Z",
+  "_test_run_fixtures": [
+    { "task": 2, "retry": 0, "status": "complete", "tests_result": "fail" }
+  ]
+}
