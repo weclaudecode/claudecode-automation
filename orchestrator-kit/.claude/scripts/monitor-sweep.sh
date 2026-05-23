@@ -92,6 +92,13 @@ setup_monitor_label() {
 
 # Main body — skipped when this file is sourced (e.g. by the test harness).
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  # Belt-and-braces: the orchestrator already checks ORCH_MONITOR_ENABLED before
+  # invoking this script, but guard here too so direct invocations respect the flag.
+  if [ "${ORCH_MONITOR_ENABLED:-1}" != "1" ]; then
+    echo "monitor-sweep: disabled via ORCH_MONITOR_ENABLED=0, exiting"
+    exit 0
+  fi
+
   if [ $# -lt 1 ]; then
     echo "usage: $0 <state_file> [<owner/repo>]" >&2
     exit 1

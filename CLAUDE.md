@@ -104,6 +104,11 @@ The phase 0 reproduction steps in `orchestrator-kit/docs/FIX-PLAN.md` are the cl
                          │
    Phase 6: plan-status.sh (dashboard refresh, best-effort)
                          │
+   Phase 7: monitor-sweep.sh   (optional — only if ORCH_MONITOR_ENABLED=1)
+            sources each _heuristics/*.sh in glob order; each heuristic
+            calls monitor_finding when a pattern fires; findings are
+            hash-dedup'd and filed as GH Issues labelled monitor:finding
+                         │
    release lock (trap also runs cleanup_active_worktrees)
 ```
 
@@ -117,6 +122,7 @@ The phase 0 reproduction steps in `orchestrator-kit/docs/FIX-PLAN.md` are the cl
 - **A blocked task cascade-blocks its transitive pending dependents.** `cascade_block` in `_dispatcher_lib.sh` walks the reverse depends_on graph and writes `blocked_reason: upstream_blocked_t<N>` on every pending downstream. Without it, downstream tasks whose dep-issue never closes loop forever and the plan never archives. Cascade only touches `pending` tasks — never preempts a live worker's `in_progress`/`in_review` row.
 - **Sensitive-flagged tasks (`auto_merge_overrides[N] == false`) get `orch:needs-robbie` and stay in `in_review`** until the operator merges by hand; sweep-merges then transitions them like any other PR.
 - **The reviewer never re-triggers the Stop hook.** Reviewers and iterators now run in their own `claude -p` calls from `review-pr.sh`/`iterate-pr.sh` (spawned by the phase scripts), not from the Stop hook. The hook's `SKIP_REVIEW=1` fence is still set on those spawns as belt-and-braces against future reintroduction of hook-driven review.
+- **Monitor findings are append-only; they never modify plan state, only file issues for operator attention.** Dedup is hash-based and re-fires after 7 days if the issue is closed without the underlying pattern clearing. Disable with `ORCH_MONITOR_ENABLED=0`; tune per-heuristic thresholds via `ORCH_MONITOR_H*` env vars (see `orchestrator-kit/README.md`).
 
 ## State files at a glance
 

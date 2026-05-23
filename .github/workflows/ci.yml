@@ -31,6 +31,8 @@ jobs:
         #            safe today because plan filenames are PLAN-NN-slug.md)
         # docs/archive/ is excluded entirely — frozen pre-fix-plan snapshot,
         # not maintained code.
+        # _heuristics/ and tests/ are covered by the same find glob — no separate
+        # step needed; `find orchestrator-kit` already picks them up.
         run: |
           shellcheck -S warning -e SC2164 -e SC2011 \
             $(find orchestrator-kit -type f -name "*.sh" -not -path "*/archive/*")
