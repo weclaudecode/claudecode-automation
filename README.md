@@ -27,6 +27,46 @@ Before installing, you need:
 - A Devin alternative — Devin is a hosted SaaS agent platform with a GUI. This is a Bash kit that runs in your terminal and on your GitHub repo, against your own Max plan.
 - A drop-in CI agent — installation requires repo-level setup (branch protection, labels, `.claude/` directory, optionally cron). The orchestrator runs on its own schedule, not on PRs.
 
+## What's included
+
+- **Autonomous worker loop** — `orchestrator.sh` ticks a fixed phase sequence, spawning one fresh `claude -p` worker per ready task into its own git worktree.
+- **Pre-push reviewer** — a separate `claude -p` reviewer reads the PR diff and posts findings; `safety_block` findings hold the task in `in_review` until iterated.
+- **Conditional auto-merge** — sensitive tasks flagged at ingest time (`auto_merge_overrides`) skip `--auto` and wait for a human; everything else merges on green.
+- **Monitor agent** — Phase 7 heuristics (H1–H7) file `monitor:finding` issues for failure patterns that would otherwise stay silent: stuck PRs, silent block, slow plans, reviewer flake, deadlock, test-fail PRs, sensitive-decisions audits.
+- **Local dashboard** *(optional)* — read-only Flask UI at `127.0.0.1:5174` showing plan status, log tail, GH issues/PRs, active workers, and effective config. Per-task cost/token tracking included.
+- **Plan-authoring helpers** — `/plan-format` slash command and `plan-author` skill produce strict-format plans that `ingest-plan.sh` accepts.
+- **Kit upgrades** — `kit-upgrade.sh` is a manifest+hash drift detector with atomic apply, so partial-upgrade footguns don't strand the loop.
+
+## How it works
+
+```mermaid
+flowchart LR
+    Op([Operator]) -->|writes &amp; ingests| P[PLAN-NN.md<br/>+ state.json]
+    Cron([cron / loop]) -.->|every N min| Orch
+
+    P --> Orch
+    Orch[orchestrator.sh tick<br/>idempotent phases 0&rarr;7]
+
+    Orch -->|Phase 5<br/>launch-pass| Wkr[Worker<br/>claude -p<br/>in worktree]
+    Orch -->|Phase 3<br/>review-pass| Rev[Reviewer<br/>claude -p]
+    Orch -->|Phase 4<br/>iterate-pass| Itr[Iterator<br/>claude -p]
+    Orch -->|Phase 7| Mon[Monitor<br/>H1&ndash;H7]
+
+    Wkr -->|push branch<br/>+ open PR| PR{{GitHub PR<br/>labels + CI}}
+    Rev -->|posts findings<br/>safety_block / clean| PR
+    Itr -->|fix-up commits| PR
+    Mon -->|files dedup'd issue| Iss([Issue:<br/>monitor:finding])
+
+    PR -->|merged / closed<br/>read by Phase 2| Orch
+    PR -->|auto-merge on green| Main([main])
+
+    Wkr -.->|appends| Dec[(decisions.md)]
+    Rev -.->|appends| Dec
+    Dec -.->|read on next spawn| Wkr
+```
+
+Every worker, reviewer, and iterator is a **fresh `claude -p` invocation** — no session resume, no shared memory. Continuity across tasks comes from on-disk state (`state.json`, `decisions.md`) plus what the orchestrator re-injects into each prompt. One tick is the unit of progress; nothing happens between ticks except CI on GitHub.
+
 ## Installation and usage
 
 See [`orchestrator-kit/README.md`](orchestrator-kit/README.md) for install instructions, the v2 state schema, and per-tick architecture. The plan-authoring helpers (`/plan-format` slash command + `plan-author` skill) are documented there too.

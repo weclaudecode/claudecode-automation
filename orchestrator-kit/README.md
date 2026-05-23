@@ -162,26 +162,129 @@ config:
 Localhost-only, no auth, single-operator tool. Full reference:
 [`docs/DASHBOARD.md`](docs/DASHBOARD.md).
 
+## How it works
+
+### System view — actors, spawns, and artifacts
+
+```mermaid
+flowchart TD
+    Op([Operator]) -->|/plan-format<br/>or plan-author skill| P[PLAN-NN.md<br/>.claude/plans/]
+    P -->|ingest-plan.sh<br/>gawk-only| S[(state.json<br/>FSM + auto_merge_overrides)]
+
+    Cron([cron / loop]):::sched -.->|every N min| Orch
+    S <-->|state_write locked<br/>per-file mkdir lock| Orch
+
+    Orch[orchestrator.sh<br/>one tick = phases 0&rarr;7<br/>PID-locked, idempotent]
+
+    Orch -->|Phase 1<br/>refresh-deps| DI([Issue:<br/>dep tracker<br/>orch:deps-met])
+    Orch -->|Phase 5: launch-pass<br/>fresh claude -p per task| Wkr[Worker<br/>git worktree<br/>claude/plan-NN-task-M]
+    Orch -->|Phase 3: review-pass<br/>fresh claude -p per PR| Rev[Reviewer]
+    Orch -->|Phase 4: iterate-pass<br/>fresh claude -p per block| Itr[Iterator]
+    Orch -->|Phase 7| Mon[Monitor sweep<br/>H1&ndash;H7 heuristics]
+
+    Wkr -->|push branch + open PR| PR{{GitHub PR<br/>+ labels + CI checks}}
+    Rev -->|posts findings<br/>safety_block / clean| PR
+    Itr -->|fix-up commits<br/>address findings| PR
+    Mon -->|files dedup'd issue| MI([Issue:<br/>monitor:finding])
+
+    PR -->|Phase 2: sweep-merges<br/>merged &rarr; state| Orch
+    PR -->|Phase 2: sweep-merges<br/>closed &rarr; block + cascade| Orch
+    PR -->|auto-merge on green<br/>OR needs-robbie hold| Main([main])
+
+    Wkr -.->|appends| Dec[(decisions.md)]
+    Rev -.->|appends| Dec
+    Dec -.->|read on next spawn| Orch
+
+    Dash([dashboard.sh<br/>optional]):::opt -.->|reads| S
+    Dash -.->|reads| PR
+    Op -.->|browses| Dash
+
+    classDef sched fill:#fde68a,stroke:#92400e
+    classDef opt fill:#e0e7ff,stroke:#3730a3
+```
+
+Key points the diagram captures:
+
+- **Fresh `claude -p` per spawn.** Workers, reviewers, and iterators never share context — continuity is on-disk (`state.json`, `decisions.md`) and re-injected each invocation.
+- **GitHub is the source of truth for "did the merge happen".** The orchestrator never assumes; Phase 2 reads PR state and reconciles.
+- **The monitor is append-only.** It files issues; it never modifies plan state or PRs.
+
+### Per-task state machine — who decides each transition
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> pending: ingest-plan.sh
+
+    pending --> in_progress: Phase 5 launch-pass\nslot open + deps met\n+ no touches collision
+    pending --> blocked: cascade\nupstream_blocked_t&lt;N&gt;
+
+    in_progress --> in_review: worker pushes branch\n+ opens PR
+    in_progress --> blocked: worker_failed_3x
+
+    in_review --> in_review: Phase 3 review-pass\nfindings posted
+    in_review --> in_review: Phase 4 iterate-pass\nfix-up commits
+    in_review --> merged: Phase 2 sweep-merges\nPR merged to main
+    in_review --> blocked: pr_closed_unmerged\nOR review_iter_cap
+
+    blocked --> pending: operator resets\nsee Resuming a blocked plan
+
+    merged --> [*]: plan archive
+    blocked --> [*]: plan archive (no merges)
+```
+
+`merged` and `blocked` are the only terminal states. The plan-completion check at the end of each tick archives the plan only when every task is in one of those two. A single `blocked` task does not block the whole plan — it cascade-blocks only its **transitive pending dependents** (via `cascade_block` in `_dispatcher_lib.sh`); independent siblings keep running.
+
 ## What each tick does
 
-1. Acquire lock (PID-aware; stale locks from crashed runs are auto-broken)
-2. Find oldest in-progress plan state file
-3. **Sweep-merges pass:** transition any `in_review` task whose PR has merged
-   to `merged`; mark plan-level blocked if a PR closed unmerged
-4. **Find-ready pass:** pick tasks whose `depends_on` are all `merged` and
-   whose `touches` don't collide with live `in_progress`/`in_review` siblings
-5. **Launch pass:** create worktree on `claude/plan-NN-task-M`, spawn
-   `claude -p` with the worker prompt + extracted task content, push, open PR,
-   transition task to `in_review` (auto-merge eligible PRs get `gh pr merge --auto`)
-6. **Review pass** (`review-pr.sh`): a fresh `claude -p` reviewer reads the PR
-   diff and posts findings; `safety_block` findings keep the task in `in_review`
-7. **Iterate pass** (`iterate-pr.sh`): for any `in_review` task with reviewer
-   findings, spawn a worker against the existing branch to address them;
-   hitting the iter cap transitions the task to `blocked`
-8. The Stop hook only smoke-checks that the worker produced a diff vs `main` —
-   it no longer drives review
-9. **Monitor sweep** (`monitor-sweep.sh`): heuristic health check — see below
-10. Release lock
+Each tick is a single shot — `orchestrator.sh` walks a fixed phase
+sequence against the active plan's state file and exits. Phase numbers
+match the log lines and the code in `orchestrator.sh`.
+
+- **Phase 0 — Lock + plan pick.** Acquire the PID-aware lockdir (stale
+  locks from crashed runs are auto-broken). Mop up any leaked worktrees
+  from a killed prior tick. Pick the newest `in_progress` plan state
+  file; otherwise idle.
+- **Phase 1 — `refresh-deps.sh`.** For each pending task whose
+  `depends_on` are all merged, add `orch:deps-met` to its dep-issue so
+  the operator (and find-ready) can see it.
+- **Phase 2 — `sweep-merges.sh`.** For each `in_review` task with a PR:
+  transition `merged` to `merged` (closes issue, forks `post-merge-check.sh`);
+  transition `closed-unmerged` to `blocked` and cascade-block its
+  transitive pending dependents.
+- **Phase 2.5 — `retry-auto-merge.sh`** *(optional)*. For each
+  `in_review` task whose PR has `orch:needs-robbie` (and is not flagged
+  sensitive), retry `gh pr merge --auto --squash --delete-branch`. On
+  success strips the label; on failure leaves the PR for the operator.
+- **Phase 3 — `review-pass.sh`** *(optional)*. For each `in_review` PR:
+  rebase if CONFLICTING/BEHIND; if CI red, post a synthetic blocker
+  (`orch:ci-gate-sha` marker); if CI pending, defer. Otherwise, when
+  HEAD SHA differs from `orch:review-sha`, spawn `review-pr.sh` in the
+  background (fresh `claude -p`, `SKIP_REVIEW=1`).
+- **Phase 4 — `iterate-pass.sh`** *(optional)*. For each `in_review` PR
+  with `orch:review-blocked` whose marker SHA matches HEAD, spawn
+  `iterate-pr.sh` to address findings. Hitting the iter cap blocks the
+  task with `blocked_reason: review_iter_cap`.
+- **Phase 5 — `launch-pass.sh`.** Fill open slots (`MAX_PARALLEL` minus
+  the in-review count). `find-ready-tasks.sh` picks ready, non-colliding
+  tasks; each spawned `launch-worker.sh` creates a worktree on
+  `claude/plan-NN-task-M`, runs `claude -p` with the worker prompt +
+  task spec, pushes, opens a PR, and transitions the task to
+  `in_review` (auto-merge-eligible PRs get `gh pr merge --auto`).
+- **Plan-completion check.** If every task is terminal (`merged` or
+  `blocked`), archive the plan + state file and notify.
+- **Phase 6 — `plan-status.sh`.** Best-effort refresh of the on-disk
+  dashboard summary.
+- **Phase 7 — `monitor-sweep.sh`** *(optional; gated by
+  `ORCH_MONITOR_ENABLED=1`)*. Heuristic health check; files
+  `monitor:finding` issues for patterns operators would otherwise miss.
+  Details below.
+- **Lock release.** The EXIT/INT/TERM trap also runs
+  `cleanup_active_worktrees`, so a killed tick doesn't leak `wt-*` dirs.
+
+The Stop hook only smoke-checks that the worker produced a diff vs
+`main` — it does **not** drive review (reviewers run in their own
+`claude -p` from `review-pr.sh`/`iterate-pr.sh`).
 
 ## Monitor agent
 
@@ -254,18 +357,39 @@ State file (v2 schema; `ingest-plan.sh` is the canonical source):
 
 ```
 CLAUDE.md                              — project conventions (root)
-orchestrator.sh                        — the loop
+orchestrator.sh                        — the single-shot tick
 .claude/
   defaults.md                          — when-in-doubt rules
   settings.json                        — hooks wiring
+  commands/                            — slash commands (e.g. /plan-format)
+  docs/
+    PLAN-FORMAT.md                     — strict plan-file schema
   prompts/
     worker-superpower.md               — autonomous worker prompt
     reviewer-system.md                 — pre-push reviewer prompt
   hooks/
-    stop-pre-push-review.sh            — runs reviewer, blocks stop on fail
+    stop-pre-push-review.sh            — Stop-hook diff smoke test
   scripts/
-    ingest-plan.sh                     — plan → state file
-    notify.sh                          — escalation notifications
+    _dispatcher_lib.sh                 — shared lib (state_write, cascade_block, locks)
+    check-preconditions.sh             — branch protection + allow_auto_merge check
+    create-issues.sh                   — open GH issues for newly-met deps
+    ingest-plan.sh                     — plan → state file (gawk-only)
+    find-ready-tasks.sh                — touches-collision aware readiness filter
+    launch-pass.sh / launch-worker.sh  — Phase 5 spawner + per-task worker
+    sweep-merges.sh                    — Phase 2 PR→state reconciler
+    refresh-deps.sh                    — Phase 1 deps-met label refresher
+    retry-auto-merge.sh                — Phase 2.5 needs-robbie retry
+    review-pass.sh / review-pr.sh      — Phase 3 reviewer dispatcher + runner
+    iterate-pass.sh / iterate-pr.sh    — Phase 4 iterator dispatcher + runner
+    rebase-pr.sh                       — review-pass rebase helper
+    post-merge-check.sh                — disowned post-merge CI watcher
+    plan-status.sh                     — Phase 6 dashboard JSON refresh
+    monitor-sweep.sh + _heuristics/    — Phase 7 monitor agent (H1–H7)
+    file-followup.sh                   — worker-side dedup'd issue filer
+    notify.sh                          — operator escalation channel
+    kit-upgrade.sh                     — manifest+hash drift detector + apply
+    setup-labels.sh                    — idempotent label installer
+    dashboard.sh + dashboard/          — optional local Flask UI (see DASHBOARD.md)
   plans/
     PLAN-NN-slug.md                    — your plans
     PLAN-NN-slug.state.json            — current task, retries, auto-merge map
@@ -274,6 +398,7 @@ orchestrator.sh                        — the loop
     decisions.md                       — append-only decision log
     run-<task>-r<retry>.json           — per-task-per-retry worker output (gitignored)
     orchestrator.lock/                 — lockdir (gitignored)
+    active_worktrees.txt               — tick-scoped worktree registry (gitignored)
 ```
 
 ## Maintenance
@@ -292,6 +417,50 @@ weekly prune cron alongside the main one:
 
 Logs rotate at 10 MiB by default (override with `ORCH_LOG_MAX_BYTES`).
 Rotated files are named `orchestrator.log.YYYYMMDDTHHMMSSZ`.
+
+## Upgrading an installed kit
+
+Once the kit is copied into a repo, partial upgrades are the main way it
+breaks — operators `cp` only the file they think changed, and a new
+`orchestrator.sh` ends up calling a helper that didn't get propagated
+into `_dispatcher_lib.sh`. `kit-upgrade.sh` is a manifest+hash drift
+detector with an atomic apply mode.
+
+```bash
+# Show drift between this repo and the canonical kit
+.claude/scripts/kit-upgrade.sh /path/to/orchestrator-kit
+
+# Apply atomically (runs shellcheck + `bash -n` and reverts on failure)
+.claude/scripts/kit-upgrade.sh /path/to/orchestrator-kit --apply
+```
+
+The manifest covers `orchestrator.sh` and everything under
+`.claude/{scripts,hooks,prompts,commands,docs}/`. It explicitly does
+**not** touch `.claude/defaults.md`, `.claude/settings.json`, `CLAUDE.md`,
+or `.claude/{plans,state,skills}/` — those are operator- or
+runtime-owned.
+
+Exit codes: `0` no drift / apply succeeded · `1` drift detected (or
+apply failed and was reverted) · `2` bad usage / missing source / not
+in a git repo. Wire it into your weekly prune cron if you maintain
+multiple installations.
+
+## Worker helpers
+
+Workers call a small set of helpers instead of raw `gh`/shell so that
+retries stay idempotent:
+
+- **`file-followup.sh <title> <body>`** — files a deduplicated
+  `agent-followup` GitHub issue. Computes a stable hash from the
+  normalised title, searches open `agent-followup` issues for a
+  matching `<!-- followup-hash: ... -->` marker, and either comments
+  on the existing issue or files a new one. Use this for any
+  side-finding the worker wants to surface without polluting the PR.
+  `--dry-run` is safe in CI; `--repo <slug>` overrides repo
+  detection.
+- **`notify.sh <subject> <body>`** — operator escalation channel
+  (Pushover / email / whatever you wire). Hooks and phase scripts
+  call this on hard blocks.
 
 ## Killing the loop
 
