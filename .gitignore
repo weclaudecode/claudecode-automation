@@ -9,8 +9,13 @@
 # Orchestrator runtime state (only relevant when the kit is installed into
 # a target repo, but listed here for hygiene if anyone runs it from a
 # clone of this source repo).
-.claude/state/orchestrator.lock/
-.claude/state/run-*.json
-.claude/state/orchestrator.log
-.claude/state/orchestrator.log.*
-.claude/state/notifications.log
+/.claude/state/orchestrator.lock/
+/.claude/state/run-*.json
+/.claude/state/orchestrator.log
+/.claude/state/orchestrator.log.*
+/.claude/state/notifications.log
+
+# Additional orchestrator runtime state (added at v2 install)
+/.claude/state/post-merge-pr*.log
+/.claude/state/active_worktrees.txt
+/.claude/state/tick-wrapper.log
