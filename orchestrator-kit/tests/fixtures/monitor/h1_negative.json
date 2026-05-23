@@ -1,0 +1,27 @@
+{
+  "plan_file": ".claude/plans/PLAN-01-test.md",
+  "total_tasks": 1,
+  "status": "in_progress",
+  "tasks": {
+    "1": {
+      "title": "Test task — in_review WITHOUT orch:needs-robbie",
+      "depends_on": [],
+      "touches": [],
+      "issue": 10,
+      "pr": 99,
+      "status": "in_review",
+      "retries": 0,
+      "max_turns": null
+    }
+  },
+  "auto_merge_overrides": {},
+  "auto_recommended": false,
+  "ingested_at": "2026-01-01T00:00:00Z",
+  "_test_pr_fixtures": {
+    "99": {
+      "labels": [],
+      "createdAt": "2026-01-01T00:00:00Z",
+      "updatedAt": "2026-01-01T00:00:00Z"
+    }
+  }
+}
