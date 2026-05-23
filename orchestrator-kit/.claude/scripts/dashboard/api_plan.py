@@ -78,21 +78,69 @@ def _reshape_tasks(tasks: dict) -> list[dict]:
             entry["merged_at"] = v["merged_at"]
         if "blocked_reason" in v:
             entry["blocked_reason"] = v["blocked_reason"]
+        if "usage" in v and isinstance(v["usage"], dict):
+            entry["usage"] = v["usage"]
         out.append(entry)
     out.sort(key=lambda t: t["n"])
     return out
 
 
+def _plan_usage_total(tasks: list[dict]) -> dict | None:
+    """Sum the per-task usage fields into a plan-level rollup.
+
+    Returns None if no task has a usage record yet — keeps the frontend's
+    "show only if data exists" rendering trivial.
+    """
+    fields = (
+        "total_cost_usd",
+        "total_input_tokens",
+        "total_output_tokens",
+        "total_cache_read_tokens",
+        "total_cache_creation_tokens",
+        "total_turns",
+        "total_duration_ms",
+    )
+    totals = {f: 0 for f in fields}
+    models: set[str] = set()
+    run_count = 0
+    has_any = False
+    for t in tasks:
+        u = t.get("usage")
+        if not isinstance(u, dict):
+            continue
+        has_any = True
+        for f in fields:
+            v = u.get(f)
+            if isinstance(v, (int, float)):
+                totals[f] += v
+        for m in u.get("models", []) or []:
+            if isinstance(m, str):
+                models.add(m)
+        runs = u.get("runs")
+        if isinstance(runs, list):
+            run_count += len(runs)
+    if not has_any:
+        return None
+    totals["models"] = sorted(models)
+    totals["total_runs"] = run_count
+    return totals
+
+
 def _reshape(doc: dict) -> dict:
     plan_file = doc.get("plan_file", "")
-    return {
+    tasks = _reshape_tasks(doc.get("tasks", {}))
+    out = {
         "plan_file": plan_file,
         "slug": _slug_from_plan_file(plan_file),
         "total_tasks": doc.get("total_tasks"),
         "status": doc.get("status"),
         "ingested_at": doc.get("ingested_at"),
-        "tasks": _reshape_tasks(doc.get("tasks", {})),
+        "tasks": tasks,
     }
+    usage_total = _plan_usage_total(tasks)
+    if usage_total is not None:
+        out["usage_total"] = usage_total
+    return out
 
 
 @bp.route("/api/plan")

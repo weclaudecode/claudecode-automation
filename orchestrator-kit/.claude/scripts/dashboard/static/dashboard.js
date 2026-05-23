@@ -48,6 +48,29 @@ function shortTime(iso) {
   } catch (e) { return iso; }
 }
 
+function formatCost(usd) {
+  if (typeof usd !== "number" || !isFinite(usd)) return "—";
+  if (usd === 0) return "$0";
+  if (usd < 0.01) return "$" + usd.toFixed(4);
+  return "$" + usd.toFixed(2);
+}
+
+function formatTokens(n) {
+  if (typeof n !== "number" || !isFinite(n) || n === 0) return "0";
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+  return String(n);
+}
+
+function formatDuration(ms) {
+  if (typeof ms !== "number" || !isFinite(ms) || ms <= 0) return "—";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return s + "s";
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return m + "m" + (rem > 0 ? rem + "s" : "");
+}
+
 async function fetchPanel(name) {
   const cfg = PANELS[name];
   const content = $(name).querySelector(".content");
@@ -86,6 +109,16 @@ function renderPlan(content, data) {
     const issue = t.issue ? "#" + t.issue : "—";
     const pr = t.pr ? "#" + t.pr : "—";
     const note = t.blocked_reason ? ' <span class="error">' + esc(t.blocked_reason) + "</span>" : "";
+    const usage = t.usage || null;
+    // Compact per-task usage: "$X.XX · Nt · Xs" if usage exists, else "—".
+    // Tokens deliberately omitted from row to keep the table scannable;
+    // plan-level totals show the full token breakdown.
+    let usageCell = "—";
+    if (usage && typeof usage.total_cost_usd === "number") {
+      usageCell = formatCost(usage.total_cost_usd)
+        + " · " + esc(usage.total_turns || 0) + "t"
+        + " · " + esc(formatDuration(usage.total_duration_ms));
+    }
     return "<tr>"
       + "<td>" + esc(t.n) + "</td>"
       + "<td>" + esc(t.title || "") + "</td>"
@@ -93,18 +126,33 @@ function renderPlan(content, data) {
       + "<td>" + esc(deps) + "</td>"
       + "<td>" + esc(issue) + "</td>"
       + "<td>" + esc(pr) + "</td>"
+      + "<td>" + usageCell + "</td>"
       + "</tr>";
   }).join("");
-  const tbody = rows || '<tr><td colspan="6" class="empty">no tasks</td></tr>';
+  const tbody = rows || '<tr><td colspan="7" class="empty">no tasks</td></tr>';
+
+  // Plan-level usage rollup (only rendered when at least one task has usage).
+  const ut = data.usage_total || null;
+  let usageKv = "";
+  if (ut) {
+    const tokens = formatTokens(ut.total_input_tokens || 0)
+      + " in · " + formatTokens(ut.total_output_tokens || 0) + " out · "
+      + formatTokens(ut.total_cache_read_tokens || 0) + " cache_r";
+    const models = (ut.models || []).map(function (m) { return m.replace(/^claude-/, ""); }).join(", ") || "—";
+    usageKv = "<dt>cost</dt><dd>" + formatCost(ut.total_cost_usd) + " · " + esc(ut.total_runs || 0) + " runs · " + esc(models) + "</dd>"
+      + "<dt>tokens</dt><dd>" + tokens + "</dd>";
+  }
+
   setHTML(content,
     '<dl class="kv">'
     + "<dt>plan</dt><dd>" + esc(data.plan_file || "") + "</dd>"
     + "<dt>status</dt><dd>" + statusBadge(data.status) + "</dd>"
     + "<dt>tasks</dt><dd>" + esc(tasks.length) + " / " + esc(data.total_tasks || tasks.length) + "</dd>"
     + "<dt>ingested</dt><dd>" + esc(data.ingested_at || "—") + "</dd>"
+    + usageKv
     + "</dl>"
     + "<table>"
-    + "<thead><tr><th>#</th><th>title</th><th>status</th><th>deps</th><th>issue</th><th>pr</th></tr></thead>"
+    + "<thead><tr><th>#</th><th>title</th><th>status</th><th>deps</th><th>issue</th><th>pr</th><th>usage</th></tr></thead>"
     + "<tbody>" + tbody + "</tbody>"
     + "</table>"
   );

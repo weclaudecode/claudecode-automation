@@ -194,6 +194,16 @@ fi
 
 cd "$REPO"
 
+# Capture usage (tokens + cost) from the run JSON for log + PR body
+# visibility. Done unconditionally so failed runs also get accounted —
+# the operator should see what each retry costs, not just successes.
+USAGE_LINE=$(extract_usage_summary "$RUN_OUT")
+if [ -n "$USAGE_LINE" ]; then
+  echo "launch-worker: usage [worker r$RETRIES] $USAGE_LINE"
+  update_task_usage "$STATE_FILE" "$TASK_NUM" "$RUN_OUT" worker || \
+    echo "launch-worker: warning — failed to persist usage to state" >&2
+fi
+
 if [ $WORKER_EXIT -ne 0 ]; then
   NEW_RETRIES=$((RETRIES + 1))
   echo "worker exited $WORKER_EXIT; retry $NEW_RETRIES/3"
@@ -246,6 +256,14 @@ ISSUE_NUM=$(jq -r --arg t "$TASK_NUM" '.tasks[$t].issue // empty' "$STATE_FILE")
 CLOSES_LINE=""
 [ -n "$ISSUE_NUM" ] && CLOSES_LINE="Closes #${ISSUE_NUM}"
 
+USAGE_FOOTER=""
+if [ -n "$USAGE_LINE" ]; then
+  USAGE_FOOTER="
+
+---
+**Usage** (worker, retry $RETRIES): \`$USAGE_LINE\`"
+fi
+
 PR_BODY="$SUMMARY
 
 ---
@@ -254,7 +272,7 @@ PR_BODY="$SUMMARY
 - Branch: $BRANCH
 - Auto-merge: $AUTO_MERGE
 - Run output: \`$RUN_OUT\`
-$CLOSES_LINE"
+$CLOSES_LINE$USAGE_FOOTER"
 
 PR_URL=$(gh pr create \
   --title "[plan-${PLAN_NUM}/t${TASK_NUM}] $SUMMARY_TITLE" \
