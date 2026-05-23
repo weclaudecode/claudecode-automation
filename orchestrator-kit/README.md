@@ -160,7 +160,66 @@ crontab -e
    hitting the iter cap transitions the task to `blocked`
 8. The Stop hook only smoke-checks that the worker produced a diff vs `main` —
    it no longer drives review
-9. Release lock
+9. **Monitor sweep** (`monitor-sweep.sh`): heuristic health check — see below
+10. Release lock
+
+## Monitor agent
+
+After every tick, the orchestrator runs `monitor-sweep.sh` (Phase 7) to check
+for common failure patterns that would otherwise stay silent. When a heuristic
+fires, it files a GitHub Issue labelled `monitor:finding`. Issues are
+hash-deduplicated so the same pattern doesn't re-flood the tracker. Closed
+issues whose underlying pattern persists re-fire after 7 days.
+
+### What it checks
+
+| ID | Heuristic | Fires when |
+|----|-----------|------------|
+| H1 | **Stuck `orch:needs-robbie` PR** | A PR has had the `orch:needs-robbie` label for > `ORCH_MONITOR_H1_STALL_HOURS` hours |
+| H2 | **Silent worker-failed-3x block** | A task reached `blocked_reason: worker_failed_3x` with no corresponding decision in `decisions.md` |
+| H3 | **Slow plan** | Plan is > `ORCH_MONITOR_H3_DAYS` days old with < `ORCH_MONITOR_H3_PCT`% tasks merged |
+| H4 | **Reviewer flake** | Same PR/SHA received ≥ `ORCH_MONITOR_H4_FLIP_THRESHOLD` alternating pass/block verdicts |
+| H5 | **Deadlock** | Orchestrator log shows an `in_review` task that appears stuck — no new tick line for > `ORCH_MONITOR_H5_WINDOW` minutes |
+| H6 | **Test-fail PR** | A worker exited with `tests_result: fail` but still opened a PR |
+| H7 | **Sensitive-decisions audit** | Plan has ≥ `ORCH_MONITOR_H7_THRESHOLD` sensitive-severity auto-decisions in `decisions.md` |
+
+### How to disable
+
+Set `ORCH_MONITOR_ENABLED=0` in the cron line (or shell profile):
+
+```cron
+*/5 * * * * cd /path/to/repo && ORCH_MONITOR_ENABLED=0 ./orchestrator.sh >> .claude/state/orchestrator.log 2>&1
+```
+
+When disabled, Phase 7 is skipped entirely and `monitor-sweep.sh` exits immediately
+if invoked directly. All other tick phases are unaffected.
+
+### How to tune thresholds
+
+Each heuristic reads its threshold from an env var. Set them in your cron line
+or shell profile alongside `ORCH_MONITOR_ENABLED`:
+
+| Var | Default | Heuristic |
+|-----|---------|-----------|
+| `ORCH_MONITOR_H1_STALL_HOURS` | `24` | H1 — hours before a needs-robbie PR is flagged stall |
+| `ORCH_MONITOR_H3_DAYS` | `7` | H3 — plan age (days) before slow-plan check applies |
+| `ORCH_MONITOR_H3_PCT` | `30` | H3 — merged% below which the plan is considered slow |
+| `ORCH_MONITOR_H4_FLIP_THRESHOLD` | `3` | H4 — consecutive alternating verdicts before flagging flake |
+| `ORCH_MONITOR_H5_WINDOW` | `60` | H5 — minutes of log silence before deadlock fires |
+| `ORCH_MONITOR_H7_THRESHOLD` | `3` | H7 — sensitive decisions before audit alert fires |
+
+### Where findings are filed
+
+All monitor findings become GitHub Issues labelled **`monitor:finding`** in the
+current repo. The label is auto-created on first sweep (yellow, description
+"Auto-filed by monitor-sweep.sh"). To review open findings:
+
+```bash
+gh issue list --label "monitor:finding" --state open
+```
+
+Findings are append-only: the monitor never modifies plan state or closes PRs.
+Operator action is always required to resolve them.
 
 State file (v2 schema; `ingest-plan.sh` is the canonical source):
 - Top-level: `plan_file`, `total_tasks`, `status` (`in_progress` | `done` | `blocked`),

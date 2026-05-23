@@ -47,3 +47,10 @@ Format:
 **Recommended option:** n/a
 **Reason:** H2 fixture prefix (`h2`) differs from heuristic name (`h2_silent_block`) so auto-discovery skips it; also `DECISIONS_FILE` env must be set per test run — both require explicit test code like the H1 section
 **Reversible:** yes
+
+## 2026-05-23 12:00 — Plan 02 Task 7
+**Decision:** CI shellcheck step already covers `_heuristics/*.sh` and `tests/` via existing `find orchestrator-kit -type f -name "*.sh"` glob; added clarifying comment rather than a new step
+**Severity:** routine
+**Recommended option:** n/a
+**Reason:** `find orchestrator-kit` recursively matches all subdirectories including `_heuristics/` and `tests/`; verified by listing matched files before editing
+**Reversible:** yes
