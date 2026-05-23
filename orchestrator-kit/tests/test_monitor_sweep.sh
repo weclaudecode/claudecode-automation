@@ -152,6 +152,41 @@ run_heuristic "$SCRIPTS_DIR/_heuristics/h2_silent_block.sh" \
 unset DECISIONS_FILE
 assert_no_finding "H2-PLAN01-T3"
 
+# ── H3: slow-plan detector ──
+# Tested explicitly because the fixture prefix ("h3") differs from the heuristic
+# filename ("h3_slow_plan"), so auto-discovery skips it.
+# Positive: ingested_at 8 days ago, 1/10 merged (10% < 30%) → fires H3-PLAN01.
+# Negative: ingested_at 8 days ago, 5/10 merged (50% >= 30%) → no fire.
+echo "--- h3_slow_plan positive ---"
+run_heuristic "$SCRIPTS_DIR/_heuristics/h3_slow_plan.sh" \
+  "$FIXTURES_DIR/h3_positive.json"
+assert_finding "H3-PLAN01"
+FIXTURE_TESTS_RUN=$((FIXTURE_TESTS_RUN + 1))
+
+echo "--- h3_slow_plan negative ---"
+run_heuristic "$SCRIPTS_DIR/_heuristics/h3_slow_plan.sh" \
+  "$FIXTURES_DIR/h3_negative.json"
+assert_no_finding "H3-PLAN01"
+
+# ── H5: deadlock detector ──
+# Tested explicitly because H5 fixtures are .txt (not .json, so auto-discovery
+# skips them) and because LOG_FILE must be pointed at the fixture log.
+# Uses h1_positive.json as STATE_FILE (plan_file = PLAN-01-test.md → hash PLAN01).
+echo "--- h5_deadlock positive ---"
+export LOG_FILE="$FIXTURES_DIR/h5_log_positive.txt"
+run_heuristic "$SCRIPTS_DIR/_heuristics/h5_deadlock.sh" \
+  "$FIXTURES_DIR/h1_positive.json"
+unset LOG_FILE
+assert_finding "H5-PLAN01-RECENT"
+FIXTURE_TESTS_RUN=$((FIXTURE_TESTS_RUN + 1))
+
+echo "--- h5_deadlock negative ---"
+export LOG_FILE="$FIXTURES_DIR/h5_log_negative.txt"
+run_heuristic "$SCRIPTS_DIR/_heuristics/h5_deadlock.sh" \
+  "$FIXTURES_DIR/h1_positive.json"
+unset LOG_FILE
+assert_no_finding "H5-PLAN01-RECENT"
+
 # ── Summary ──
 if [ "$TESTS_FAILED" -gt 0 ]; then
   echo "RESULT: $TESTS_FAILED failure(s) (fixture tests run: $FIXTURE_TESTS_RUN)" >&2
