@@ -325,3 +325,113 @@ find_timeout_cmd() {
     || command -v gtimeout 2>/dev/null \
     || true
 }
+
+# ---- extract_usage_summary ----
+# Parse a `claude -p --output-format json` run file's terminal "result"
+# message and emit a one-line usage summary. Format:
+#
+#   tokens={in:N out:N cache_r:N cache_w:N} cost=$N model=NAME turns=N duration=Ns
+#
+# Trusts claude's own `total_cost_usd` and `modelUsage` fields rather than
+# maintaining a pricing table that drifts when Anthropic changes prices.
+# Emits empty string (and returns 0) if the run file is missing or doesn't
+# contain a parseable result message — callers should treat that as
+# "no usage to report" rather than an error.
+extract_usage_summary() {
+  local run_json="$1"
+  [ -f "$run_json" ] || { echo ""; return 0; }
+  jq -r '
+    last |
+    if .type == "result" then
+      "tokens={in:\(.usage.input_tokens // 0) " +
+      "out:\(.usage.output_tokens // 0) " +
+      "cache_r:\(.usage.cache_read_input_tokens // 0) " +
+      "cache_w:\(.usage.cache_creation_input_tokens // 0)} " +
+      "cost=$\((.total_cost_usd // 0) * 10000 | round / 10000) " +
+      "model=\((.modelUsage // {}) | (keys | .[0] // "?") | sub("^claude-"; "")) " +
+      "turns=\(.num_turns // 0) " +
+      "duration=\((.duration_ms // 0) / 1000 | round)s"
+    else
+      ""
+    end
+  ' "$run_json" 2>/dev/null || echo ""
+}
+
+# ---- update_task_usage ----
+# Append a run's usage to state.tasks.<N>.usage, accumulating totals and
+# preserving a per-run breakdown.
+#
+# Usage:
+#   update_task_usage <state_file> <task_num> <run_json> <run_kind>
+#
+# run_kind is informational, one of: worker | iterator | reviewer.
+# Schema added under state.tasks.<N>.usage:
+#   {
+#     runs: [{kind, cost_usd, input_tokens, output_tokens,
+#             cache_read_input_tokens, cache_creation_input_tokens,
+#             num_turns, duration_ms, model, is_error, run_at}],
+#     total_cost_usd, total_input_tokens, total_output_tokens,
+#     total_cache_read_tokens, total_cache_creation_tokens,
+#     total_turns, total_duration_ms,
+#     models: [string]  (unique list of models used across runs)
+#   }
+#
+# Failures parsing the run JSON are silent (state untouched, return 0).
+# Failures writing state surface as a state_write error to the caller.
+update_task_usage() {
+  local state_file="$1"
+  local task_num="$2"
+  local run_json="$3"
+  local run_kind="$4"
+
+  [ -f "$run_json" ] || return 0
+
+  local run_obj
+  run_obj=$(jq --arg kind "$run_kind" '
+    last |
+    if .type == "result" then
+      {
+        kind: $kind,
+        cost_usd: (.total_cost_usd // 0),
+        input_tokens: (.usage.input_tokens // 0),
+        output_tokens: (.usage.output_tokens // 0),
+        cache_read_input_tokens: (.usage.cache_read_input_tokens // 0),
+        cache_creation_input_tokens: (.usage.cache_creation_input_tokens // 0),
+        num_turns: (.num_turns // 0),
+        duration_ms: (.duration_ms // 0),
+        model: ((.modelUsage // {}) | (keys | .[0] // null)),
+        is_error: (.is_error // false),
+        run_at: (now | todateiso8601)
+      }
+    else
+      null
+    end
+  ' "$run_json" 2>/dev/null)
+
+  if [ -z "$run_obj" ] || [ "$run_obj" = "null" ]; then
+    return 0
+  fi
+
+  state_write "$state_file" '
+    .tasks[$t].usage //= {
+      runs: [],
+      total_cost_usd: 0,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      total_cache_read_tokens: 0,
+      total_cache_creation_tokens: 0,
+      total_turns: 0,
+      total_duration_ms: 0,
+      models: []
+    } |
+    .tasks[$t].usage.runs += [$run] |
+    .tasks[$t].usage.total_cost_usd += $run.cost_usd |
+    .tasks[$t].usage.total_input_tokens += $run.input_tokens |
+    .tasks[$t].usage.total_output_tokens += $run.output_tokens |
+    .tasks[$t].usage.total_cache_read_tokens += $run.cache_read_input_tokens |
+    .tasks[$t].usage.total_cache_creation_tokens += $run.cache_creation_input_tokens |
+    .tasks[$t].usage.total_turns += $run.num_turns |
+    .tasks[$t].usage.total_duration_ms += $run.duration_ms |
+    .tasks[$t].usage.models = ((.tasks[$t].usage.models + [$run.model]) | map(select(. != null)) | unique)
+  ' --arg t "$task_num" --argjson run "$run_obj"
+}

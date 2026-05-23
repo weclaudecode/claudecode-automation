@@ -26,3 +26,7 @@
 # excluded.
 .claude/plans/*.state.json
 .claude/plans/archive/*.state.json
+
+# Claude Code's own runtime (not orchestrator-kit related)
+.claude/scheduled_tasks.lock
+.claude/worktrees/

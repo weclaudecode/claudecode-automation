@@ -12,7 +12,8 @@
 #   4. iterate-pass    (optional — only if iterate-pass.sh exists)
 #   5. launch-pass     spawn up to MAX_PARALLEL workers on ready tasks
 #   6. Plan-completion check: archive if all tasks terminal
-#   7. Release lock
+#   7. monitor-sweep   heuristic health check (optional; ORCH_MONITOR_ENABLED)
+#   8. Release lock
 #
 # Each phase is best-effort: a phase exit failure logs to stderr but
 # does not abort the tick. Phases are sequential within a tick;
@@ -200,6 +201,15 @@ if [ "$ALL_TERMINAL" = "true" ]; then
   else
     bash "$NOTIFY" "plan $PLAN_NUM done" "all $TOTAL tasks merged"
   fi
+fi
+
+# ---- Phase 7: monitor sweep ----
+if [ "${ORCH_MONITOR_ENABLED:-1}" = "1" ] && \
+   [ -x .claude/scripts/monitor-sweep.sh ]; then
+  echo "--- phase 7: monitor sweep ---"
+  STATE_FILE="$STATE_FILE" REPO="$REPO_OWNER_REPO" \
+    bash .claude/scripts/monitor-sweep.sh || \
+    echo "warning: monitor-sweep exited non-zero (continuing)" >&2
 fi
 
 # ---- Dashboard refresh (Task 5.1) ----

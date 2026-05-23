@@ -346,6 +346,18 @@ fi
 
 cd "$REPO" || { echo "iterate-pr: cd back to $REPO failed" >&2; exit 1; }
 
+# Capture iterator usage. Same pattern as launch-worker — runs even on
+# failed iterations so cost-of-retry is visible to the operator. PR
+# comment posted below only if the iter produced parseable output.
+USAGE_LINE=$(extract_usage_summary "$RUN_OUT")
+if [ -n "$USAGE_LINE" ]; then
+  echo "iterate-pr: usage [iterator i$NEW_ITER r$RETRIES] $USAGE_LINE"
+  update_task_usage "$STATE_FILE" "$TASK_NUM" "$RUN_OUT" iterator || \
+    echo "iterate-pr: warning — failed to persist usage to state" >&2
+  gh pr comment "$PR_NUM" --body "**Usage** (iterator, iter $NEW_ITER / retry $RETRIES): \`$USAGE_LINE\`" >/dev/null 2>&1 || \
+    echo "iterate-pr: warning — failed to post usage comment to PR #$PR_NUM" >&2
+fi
+
 if [ $WORKER_EXIT -ne 0 ]; then
   NEW_RETRIES=$((RETRIES + 1))
   echo "iterate-pr: worker exited $WORKER_EXIT; retry $NEW_RETRIES/3"
