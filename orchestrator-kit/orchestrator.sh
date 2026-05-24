@@ -13,7 +13,8 @@
 #   5. launch-pass     spawn up to MAX_PARALLEL workers on ready tasks
 #   6. Plan-completion check: archive if all tasks terminal
 #   7. monitor-sweep   heuristic health check (optional; ORCH_MONITOR_ENABLED)
-#   8. Release lock
+#   8. deploy-watch    poll disowned CDK deploys; settle state (optional)
+#   (lock release)     happens via cleanup_tick EXIT trap
 #
 # Each phase is best-effort: a phase exit failure logs to stderr but
 # does not abort the tick. Phases are sequential within a tick;
@@ -227,6 +228,19 @@ if [ "${ORCH_MONITOR_ENABLED:-1}" = "1" ] && \
   STATE_FILE="$STATE_FILE" REPO="$REPO_OWNER_REPO" \
     bash .claude/scripts/monitor-sweep.sh || \
     echo "warning: monitor-sweep exited non-zero (continuing)" >&2
+fi
+
+# ---- Phase 8: deploy-watch (autonomous CDK deploys) ----
+# Polls .claude/state/deploy-status-*.json files written by workers that
+# disowned a `cdk deploy` rather than waiting for it inline. On each tick,
+# checks PID liveness: still alive -> no-op; dead -> parse log tail for
+# outcome, update the plan state file (merged/blocked), post a PR comment,
+# and release the stack lock. Optional: only runs when the script exists and
+# is executable, matching the pattern of review-pass/iterate-pass/monitor-sweep.
+if [ -x "$REPO_ROOT/.claude/scripts/deploy-watch.sh" ]; then
+  echo "--- phase 8: deploy-watch ---"
+  bash "$REPO_ROOT/.claude/scripts/deploy-watch.sh" || \
+    echo "warning: deploy-watch exited non-zero (continuing)" >&2
 fi
 
 # ---- Dashboard refresh (Task 5.1) ----
