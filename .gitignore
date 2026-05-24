@@ -27,6 +27,15 @@
 .claude/plans/*.state.json
 .claude/plans/archive/*.state.json
 
+# Dashboard runtime (Flask process, venv, logs)
+/.claude/state/dashboard.pid
+/.claude/state/dashboard.log
+/.claude/state/dashboard-venv/
+
+# Python bytecode anywhere under the kit
+**/__pycache__/
+*.pyc
+
 # Claude Code's own runtime (not orchestrator-kit related)
 .claude/scheduled_tasks.lock
 .claude/worktrees/
