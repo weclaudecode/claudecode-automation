@@ -94,4 +94,89 @@ if [ "$AM_OUTPUT" != "true" ]; then
 fi
 
 echo "OK: $REPO has allow_auto_merge=true"
+
+# ---------------------------------------------------------------------------
+# Skill-presence preflight: check that Claude Code plugins required by
+# AWS-flagged plans are installed.
+#
+# Scans .claude/plans/*.md (non-archive) for state files containing aws_env.
+# If any active plan has aws_env, requires:
+#   - Always: aws-core, aws-agents
+#   - Conditionally (plan/task body mentions agentcore/AgentCore):
+#     cdk-agentcore, agentcore-deploy-runbook, agentcore-architect
+# ---------------------------------------------------------------------------
+
+PLANS_DIR="$(git rev-parse --show-toplevel)/.claude/plans"
+MISSING_PLUGINS=()
+AWS_FLAGGED=0
+NEEDS_AGENTCORE=0
+
+if [ -d "$PLANS_DIR" ]; then
+  for plan_md in "$PLANS_DIR"/*.md; do
+    [ -e "$plan_md" ] || continue  # no glob match
+    # Derive state file path from plan markdown path
+    state_file="${plan_md%.md}.state.json"
+    [ -f "$state_file" ] || continue
+    # Check if this plan has an aws_env block
+    has_aws=$(jq '.aws_env // empty' "$state_file" 2>/dev/null)
+    [ -n "$has_aws" ] || continue
+    AWS_FLAGGED=1
+    # Check whether plan prose mentions agentcore (case-insensitive)
+    if grep -qi 'agentcore' "$plan_md" 2>/dev/null; then
+      NEEDS_AGENTCORE=1
+    fi
+  done
+fi
+
+if [ "$AWS_FLAGGED" -eq 0 ]; then
+  echo "skill preflight: no AWS-flagged plans, skipping"
+  exit 0
+fi
+
+# Verify claude CLI is available before running plugin list
+if ! command -v claude >/dev/null 2>&1; then
+  echo "FAIL: claude CLI not on PATH — install per https://docs.anthropic.com/en/docs/claude-code/setup" >&2
+  exit 1
+fi
+
+# Capture plugin list once
+PLUGIN_LIST=$(claude plugin list 2>&1)
+PLUGIN_LIST_EXIT=$?
+if [ $PLUGIN_LIST_EXIT -ne 0 ]; then
+  echo "FAIL: 'claude plugin list' failed (exit $PLUGIN_LIST_EXIT)" >&2
+  echo "$PLUGIN_LIST" | sed 's/^/  /' >&2
+  exit 1
+fi
+
+# Helper: check if a plugin name appears in the list output
+plugin_installed() {
+  local name="$1"
+  # Output lines look like: "  ❯ aws-core@<source>"
+  echo "$PLUGIN_LIST" | grep -q "❯ ${name}@"
+}
+
+# Always-required for AWS-flagged plans
+for plugin in aws-core aws-agents; do
+  if ! plugin_installed "$plugin"; then
+    MISSING_PLUGINS+=("$plugin")
+  fi
+done
+
+# Conditionally required when plan mentions agentcore
+if [ "$NEEDS_AGENTCORE" -eq 1 ]; then
+  for plugin in cdk-agentcore agentcore-deploy-runbook agentcore-architect; do
+    if ! plugin_installed "$plugin"; then
+      MISSING_PLUGINS+=("$plugin")
+    fi
+  done
+fi
+
+if [ ${#MISSING_PLUGINS[@]} -gt 0 ]; then
+  for plugin in "${MISSING_PLUGINS[@]}"; do
+    echo "missing plugin: $plugin — install: claude plugin install $plugin" >&2
+  done
+  exit 1
+fi
+
+echo "skill preflight: all required plugins present"
 exit 0
