@@ -158,12 +158,46 @@ printf '%s\n' "$PR_DIFF" > "$DIFF_PATH" || {
 PRIOR_ITER=$(echo "$PR_BODY" | grep -oE 'orch:review-iter:[0-9]+' | head -1 | grep -oE '[0-9]+' || echo "0")
 NEW_ITER=$((PRIOR_ITER + 1))
 
+# ---- CDK diff (only for plans with aws_env) ----
+CDK_DIFF_TEXT=""
+if [ "$(jq -r '.aws_env // empty' "$STATE_FILE")" != "" ]; then
+  echo "review-pr: aws_env detected — running cdk-diff.sh for PR #$PR_NUM..." >&2
+  CDK_DIFF_SCRIPT="$REPO_ROOT/.claude/scripts/cdk-diff.sh"
+  if [ -x "$CDK_DIFF_SCRIPT" ]; then
+    # Capture stdout only (structured diff text). cdk-diff's stderr is
+    # operator-facing diagnostics — letting it flow to our own stderr keeps
+    # the reviewer prompt clean and the tick log informative.
+    CDK_DIFF_TEXT=$(bash "$CDK_DIFF_SCRIPT" "$PR_NUM" "$STATE_FILE") || {
+      echo "review-pr: cdk-diff failed (exit $?) — continuing with text-only review" >&2
+      CDK_DIFF_TEXT=""
+    }
+  else
+    echo "review-pr: $CDK_DIFF_SCRIPT not found or not executable — skipping CDK diff" >&2
+  fi
+fi
+
 # ---- Build reviewer prompt ----
 REVIEWER_SYSTEM="$REPO_ROOT/.claude/prompts/reviewer-system.md"
 [ -f "$REVIEWER_SYSTEM" ] || {
   echo "review-pr: reviewer system prompt missing: $REVIEWER_SYSTEM" >&2
   exit 1
 }
+
+# Build the optional CDK diff section (empty string when no aws_env).
+CDK_DIFF_SECTION=""
+if [ -n "$CDK_DIFF_TEXT" ]; then
+  CDK_DIFF_SECTION=$(cat <<'CDKSECTION'
+
+## Cloud-side delta (from `cdk diff`)
+
+The following CDK diff was captured from the PR head and posted as a comment
+on the PR. Subagents that review for IAM widening, destructive changes, or
+region drift should read this section carefully.
+
+CDKSECTION
+  )
+  CDK_DIFF_SECTION="${CDK_DIFF_SECTION}${CDK_DIFF_TEXT}"
+fi
 
 REVIEW_PROMPT=$(cat <<EOF
 $(cat "$REVIEWER_SYSTEM")
@@ -176,6 +210,7 @@ $(cat "$REVIEWER_SYSTEM")
 - PR_NUM:    $PR_NUM
 - DIFF_PATH: $DIFF_PATH
 - Iteration: $NEW_ITER
+${CDK_DIFF_SECTION}
 
 ## Task spec (verbatim from plan)
 

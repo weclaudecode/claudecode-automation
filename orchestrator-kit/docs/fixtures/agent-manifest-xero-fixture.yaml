@@ -1,0 +1,25 @@
+# Minimal fixture for agent-manifest-to-plan skill testing.
+# Exercises: 2 active tools, 1 deferred tool, AWS context fields.
+
+name: test-agent
+account: "111122223333"
+region: ap-southeast-2
+profile: test-profile
+model_id: au.anthropic.claude-sonnet-4-5
+
+tools:
+  - id: tool-one
+    type: lambda
+    description: "First active tool for testing."
+    auth: iam
+
+  - id: tool-two
+    type: lambda
+    description: "Second active tool for testing."
+    auth: oauth_3lo
+
+  - id: tool-deferred
+    type: lambda
+    description: "This tool is deferred and should be skipped."
+    auth: iam
+    status: deferred

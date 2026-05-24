@@ -159,6 +159,11 @@ Plan-level `status: blocked` only appears at archive time when no tasks merged (
 ## Hard dependencies (will silently break things if missing)
 
 - **`gawk`** (GNU awk), not BSD awk. `ingest-plan.sh` uses `match($0, regex, array)` which BSD awk silently no-ops, causing **every plan to ingest with empty `auto_merge_overrides` so IAM/migration tasks auto-merge**. The current `orchestrator-kit/.claude/scripts/ingest-plan.sh` enforces this via `command -v gawk`; the root-level draft does not. On macOS: `brew install gawk`.
+- **`PyYAML`** (Python package) — required since PLAN-05. `ingest-plan.sh`
+  uses `python3 -c 'import yaml'` to parse the `---` YAML frontmatter of
+  plan files (the new `aws:`, `env:`, `requires:`, `pre_flight:` keys).
+  Without PyYAML, ingest fails with `ModuleNotFoundError`. Install via
+  `pip install pyyaml` (system pip or whichever python3 the kit uses).
 - **`pr-review-toolkit` plugin** in the target repo. `review-pr.sh` runs as a multi-agent coordinator (see `orchestrator-kit/.claude/prompts/reviewer-system.md`) that dispatches `pr-review-toolkit:code-reviewer`, `silent-failure-hunter`, `comment-analyzer`, `pr-test-analyzer`, `type-design-analyzer`, plus the built-in `/security-review` skill, in parallel. Without the plugin, the coordinator's Task calls return "Unknown subagent type" and the reviewer **degrades to an inline single-agent review** (still produces a JSON verdict so the merge gate keeps working, but loses the multi-perspective signal and the security pass). Install in each target repo with `claude plugin install pr-review-toolkit`. Worker and iterator prompts also reference `superpowers:verification-before-completion`, `superpowers:test-driven-development`, `superpowers:systematic-debugging`, `superpowers:receiving-code-review`, and the `context7` MCP — same degradation policy: noted in `decisions.md` and skipped if not present.
 - `jq`, `gh`, `git`, `claude` CLI. The orchestrator assumes `gh auth status` works and `claude /login` has been done with a Max plan.
 - The reviewer Stop hook depends on `claude -p` being callable from inside a hook. Settings file at `.claude/settings.json` wires it.

@@ -10,6 +10,7 @@ const PANELS = {
   github:  { endpoint: "/api/github",  render: renderGithub  },
   workers: { endpoint: "/api/workers", render: renderWorkers },
   config:  { endpoint: "/api/config",  render: renderConfig  },
+  bedrock: { endpoint: "/api/bedrock", render: renderBedrock },
 };
 
 const state = { paused: false, intervalId: null, logsScrollPinned: true, activePopover: null };
@@ -374,6 +375,105 @@ function renderConfig(content, data) {
   setHTML(content,
     "<table><thead><tr><th>name</th><th>current</th><th>default</th><th>source</th><th>description</th></tr></thead>"
     + "<tbody>" + (rows || '<tr><td colspan="5" class="empty">no tunables</td></tr>') + "</tbody></table>"
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Bedrock spend tile
+// ---------------------------------------------------------------------------
+
+// Builds an inline SVG sparkline (80×20 px) from a daily_series array.
+// Each element: {date, usd}. Returns an SVG string.
+function bedrockSparkline(series) {
+  if (!series || series.length === 0) return "";
+  var values = series.map(function (d) { return typeof d.usd === "number" ? d.usd : 0; });
+  var maxVal = Math.max.apply(null, values);
+  var W = 80;
+  var H = 20;
+  var n = values.length;
+  var barW = Math.max(1, Math.floor(W / n) - 1);
+  var gap = Math.max(0, Math.floor((W - barW * n) / Math.max(n - 1, 1)));
+
+  var rects = values.map(function (v, i) {
+    var h = maxVal > 0 ? Math.max(2, Math.round((v / maxVal) * H)) : 2;
+    var x = i * (barW + gap);
+    var y = H - h;
+    return '<rect x="' + x + '" y="' + y + '" width="' + barW + '" height="' + h
+      + '" fill="var(--accent)" opacity="0.75"/>';
+  }).join("");
+
+  // Last bar brighter to highlight today.
+  if (values.length > 0) {
+    var lastH = maxVal > 0 ? Math.max(2, Math.round((values[values.length - 1] / maxVal) * H)) : 2;
+    var lastX = (values.length - 1) * (barW + gap);
+    var lastY = H - lastH;
+    rects += '<rect x="' + lastX + '" y="' + lastY + '" width="' + barW + '" height="' + lastH
+      + '" fill="var(--accent)" opacity="1"/>';
+  }
+
+  return '<svg class="bedrock-sparkline" width="' + W + '" height="' + H
+    + '" viewBox="0 0 ' + W + ' ' + H + '" aria-hidden="true">' + rects + '</svg>';
+}
+
+function renderBedrock(content, data) {
+  if (!data) {
+    setHTML(content, '<p class="empty">no data</p>');
+    return;
+  }
+
+  var status = data.status || "error";
+
+  // n/a states — degrade cleanly with a one-liner.
+  if (status !== "ok") {
+    var naReasons = {
+      "aws_missing":    "aws CLI not installed",
+      "no_credentials": "no AWS credentials configured",
+      "ce_denied":      "ce access denied",
+      "no_aws_env":     "no plan with aws_env configured",
+      "error":          "AWS CE call failed",
+    };
+    var reason = naReasons[status] || status;
+    var detail = data.detail ? " — " + esc(data.detail) : "";
+    setHTML(content,
+      '<div class="bedrock-na">'
+      + '<span class="bedrock-amount na">n/a</span>'
+      + '<div class="bedrock-reason">' + esc(reason) + esc(detail) + '</div>'
+      + '</div>'
+    );
+    return;
+  }
+
+  // Happy path.
+  var mtd = data.month_to_date_usd;
+  var proj = data.projected_usd;
+  var series = data.daily_series || [];
+
+  var amountStr = (typeof mtd === "number" && isFinite(mtd))
+    ? (mtd < 0.01 ? "$" + mtd.toFixed(4) : "$" + mtd.toFixed(2))
+    : "—";
+
+  var projStr = (typeof proj === "number" && isFinite(proj))
+    ? (proj < 0.01 ? "$" + proj.toFixed(4) : "$" + proj.toFixed(2))
+    : null;
+
+  var account = data.account ? '<span class="bedrock-acct">' + esc(data.account) + '</span>' : "";
+
+  var spark = bedrockSparkline(series);
+
+  var projHTML = projStr
+    ? '<div class="bedrock-proj">proj. month-end: <strong>' + esc(projStr) + '</strong></div>'
+    : "";
+
+  setHTML(content,
+    '<div class="bedrock-tile">'
+    + '<div class="bedrock-header">'
+    + '<span class="bedrock-label">month-to-date</span>'
+    + account
+    + '</div>'
+    + '<div class="bedrock-amount">' + esc(amountStr) + '</div>'
+    + (spark ? '<div class="bedrock-spark">' + spark + '<span class="bedrock-spark-label">14d daily</span></div>' : "")
+    + projHTML
+    + '</div>'
   );
 }
 

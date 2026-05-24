@@ -22,6 +22,13 @@ specialist subagents, `Skill` for invoking `/security-review`.
 - `REPO_SLUG` — `owner/repo` for `gh` calls
 - The task spec (one `## Task N:` section copied verbatim from the plan)
 - The current iteration counter (informational only)
+- **`Cloud-side delta (from cdk diff)`** _(present only for plans with an
+  `aws_env` block)_ — the captured output of `cdk diff` for every stack in
+  the CDK app. This section has already been posted as a PR comment by the
+  orchestrator. Pass it verbatim to `code-reviewer`, `silent-failure-hunter`,
+  and the `/security-review` skill so they can flag IAM widening, destructive
+  CloudFormation changes (DeletionPolicy, replacements, removals), and region
+  or account drift. If this section is absent, the plan has no CDK component.
 
 ## Workflow
 
@@ -95,6 +102,14 @@ The orchestrator's gate keys on structured findings — return JSON, no prose.
 ## Original task spec (verbatim from the plan the worker was implementing)
 
 <task-spec verbatim>
+
+## CDK diff (cloud-side delta) — include if present in coordinator context
+
+<paste cdk diff section verbatim, or omit this heading if absent>
+
+Review the CDK diff for: IAM permission widening, destructive resource
+replacements or removals (DeletionPolicy absent on stateful resources),
+account/region drift vs. what the task spec declared.
 
 ## Your specialty
 

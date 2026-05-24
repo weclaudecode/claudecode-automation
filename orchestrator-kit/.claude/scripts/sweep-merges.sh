@@ -110,7 +110,7 @@ while read -r task_num pr_num issue_num; do
         PMC="$REPO_ROOT/.claude/scripts/post-merge-check.sh"
         if [ -x "$PMC" ]; then
           PMC_LOG="$REPO_ROOT/.claude/state/post-merge-pr${pr_num}.log"
-          nohup bash "$PMC" "$pr_num" "$REPO" >> "$PMC_LOG" 2>&1 &
+          nohup bash "$PMC" "$pr_num" "$REPO" "$STATE_FILE" "$task_num" >> "$PMC_LOG" 2>&1 &
           disown 2>/dev/null || true
           echo "sweep-merges: forked post-merge-check for PR #$pr_num (PID $!, log: $PMC_LOG)"
         fi

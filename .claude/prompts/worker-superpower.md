@@ -129,6 +129,27 @@ above prescribe — escalate on ambiguity.
   address the findings and continue. If after addressing them the reviewer
   still fails, escalate (Tier 3).
 
+## AWS context
+
+If this plan has an `aws:` block in its frontmatter (check with
+`jq '.aws_env' .claude/plans/PLAN-NN-*.state.json`), the orchestrator
+has already exported these env vars into your process:
+
+- `AWS_PROFILE`, `AWS_REGION`, `AWS_DEFAULT_REGION`
+- `CDK_DEFAULT_ACCOUNT`, `CDK_DEFAULT_REGION`
+
+**Do NOT** grep YAML/manifest files, CloudFormation templates, or CDK
+source to re-derive the region or account — those sources can drift from
+the agreed deployment target. The env vars are the single source of truth.
+
+The `cdk_app_path` (CDK app root relative to repo root) is in the plan's
+`aws:` frontmatter — read it with `head -20 .claude/plans/PLAN-NN-*.md`
+or `jq -r '.aws_env.cdk_app_path' .claude/plans/PLAN-NN-*.state.json`.
+
+When making CDK or AgentCore decisions, invoke these skills:
+`aws-agents:agents-deploy`, `cdk-agentcore`, `agentcore-deploy-runbook`.
+Call them when uncertain rather than guessing the correct construct API.
+
 ## Scope discipline
 
 - If you spot a bug or improvement outside the task: file a GitHub issue
