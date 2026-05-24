@@ -121,6 +121,23 @@ EFFECTIVE_AUTO_RECOMMENDED=$(resolve_auto_recommended "$STATE_FILE")
 
 echo "plan: $PLAN_FILE  total: $TOTAL  max_parallel: $MAX_PARALLEL  auto_recommended: $EFFECTIVE_AUTO_RECOMMENDED  repo: $REPO_OWNER_REPO"
 
+# ---- Pre-flight operator gate (Task 4) ----
+# If the active plan's state contains a pre_flight block, check for the
+# corresponding GitHub issue. Gate exits 2 when the issue is open (no-op
+# this tick), 0 when cleared, and 1 on hard error.
+if bash .claude/scripts/preflight-gate.sh "$STATE_FILE"; then
+  : # gate clear — proceed
+else
+  _pf_rc=$?
+  if [ "$_pf_rc" = "2" ]; then
+    echo "tick: preflight gate active, no-op"
+    exit 0
+  else
+    echo "tick: preflight-gate.sh error (rc=$_pf_rc), aborting"
+    exit "$_pf_rc"
+  fi
+fi
+
 # ---- Phase 1: refresh deps ----
 echo "--- phase 1: refresh deps ---"
 bash .claude/scripts/refresh-deps.sh "$STATE_FILE" "$REPO_OWNER_REPO" || \
