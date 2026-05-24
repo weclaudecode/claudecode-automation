@@ -178,3 +178,211 @@ ul.bare li:last-child { border-bottom: none; }
   border-radius: 2px;
   color: var(--fg-dim);
 }
+
+/* ---------------------------------------------------------------------- *
+ * Alerts strip — sits between topbar and grid; hidden when empty
+ * ---------------------------------------------------------------------- */
+
+#alerts-strip {
+  margin: 12px 12px 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+#alerts-strip.empty { display: none; }
+#alerts-strip .content { padding: 8px 12px; }
+
+.alerts-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.alerts-title { font-weight: 600; color: var(--warn); letter-spacing: 0.04em; }
+.alerts-counts { color: var(--fg-dim); font-size: 11px; }
+.alerts-toggle { margin-left: auto; }
+
+#alerts-strip.collapsed .alerts-body { display: none; }
+#alerts-strip.collapsed .alerts-header { border-bottom: none; padding-bottom: 0; }
+
+.alerts-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+}
+
+.alert-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 10px;
+  border-left: 3px solid var(--fg-dim);
+  background: var(--bg-elev);
+  border-radius: 2px;
+}
+.alert-card.error { border-left-color: var(--error); background: rgba(226, 93, 93, 0.08); }
+.alert-card.warn  { border-left-color: var(--warn);  background: rgba(232, 198, 78, 0.08); }
+.alert-card.info  { border-left-color: var(--accent); }
+.alert-icon { font-size: 14px; line-height: 1; padding-top: 2px; min-width: 16px; text-align: center; }
+.alert-body { flex: 1; min-width: 0; }
+.alert-summary { font-size: 13px; }
+.alert-detail  { font-size: 11px; color: var(--fg-dim); margin-top: 2px; word-break: break-word; }
+.alert-since   { color: var(--fg-dim); font-size: 11px; margin-left: 6px; }
+.alert-link    { font-size: 11px; margin-left: 4px; }
+
+/* ---------------------------------------------------------------------- *
+ * CI dot for PR rows
+ * ---------------------------------------------------------------------- */
+
+.ci-dot {
+  display: inline-block;
+  font-size: 10px;
+  width: 1.1em;
+  text-align: center;
+  vertical-align: middle;
+  margin-right: 2px;
+}
+.ci-dot.success { color: var(--status-merged); }
+.ci-dot.failure { color: var(--status-blocked); }
+.ci-dot.pending { color: var(--status-in_review); }
+.ci-dot.none    { color: var(--fg-dim); }
+
+/* ---------------------------------------------------------------------- *
+ * Help icon + runbook popover
+ * ---------------------------------------------------------------------- */
+
+.help-icon, .alert-help {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+  margin: 0 2px;
+  vertical-align: baseline;
+}
+.help-icon:hover, .alert-help:hover { color: var(--fg); }
+.help-icon:focus-visible, .alert-help:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.runbook-popover {
+  background: var(--bg-panel);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 10px 12px;
+  max-width: 520px;
+  min-width: 280px;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.popover-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--accent);
+  padding-right: 24px;
+}
+.popover-snippet {
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  max-height: 240px;
+  overflow: auto;
+}
+.popover-close {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+  background: transparent;
+  border: none;
+  color: var(--fg-dim);
+}
+.popover-close:hover { color: var(--fg); }
+.popover-copy { align-self: flex-start; font-size: 11px; }
+
+/* ---------------------------------------------------------------------- *
+ * Help overlay
+ * ---------------------------------------------------------------------- */
+
+#help-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 200;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 60px 16px;
+}
+#help-overlay[hidden] { display: none; }
+.help-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-width: 640px;
+  width: 100%;
+  max-height: 80vh;
+  overflow: auto;
+  position: relative;
+}
+.help-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.help-header h2 { margin: 0; font-size: 13px; font-weight: 600; }
+#help-close {
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 8px;
+  background: transparent;
+  border: none;
+  color: var(--fg-dim);
+}
+#help-close:hover { color: var(--fg); }
+.help-body { padding: 14px 18px; }
+.help-body h3 {
+  margin: 14px 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-dim);
+}
+.help-body h3:first-child { margin-top: 0; }
+.help-body .kv { margin: 6px 0; }
+.help-body ul.bare li { display: flex; gap: 8px; align-items: baseline; }
+
+/* ---------------------------------------------------------------------- *
+ * Misc — soft error banner; better focus styles
+ * ---------------------------------------------------------------------- */
+
+.error.soft {
+  margin-bottom: 8px;
+  padding: 4px 8px;
+  background: rgba(226, 93, 93, 0.08);
+  border-left: 3px solid var(--error);
+  border-radius: 2px;
+  font-size: 11px;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
