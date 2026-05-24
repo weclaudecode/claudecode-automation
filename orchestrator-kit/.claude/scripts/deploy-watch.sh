@@ -15,7 +15,13 @@
 #
 #   source "$REPO/.claude/scripts/_dispatcher_lib.sh"
 #
-#   acquire_stack_lock "$STACK" || {
+#   # T12: stack locks are per-env. The worker must read its plan's env and
+#   # pass it as the 2nd arg so the lock lands under .claude/state/<env>/.
+#   # deploy-watch later reads env from the plan state file to release the
+#   # matching lock — pass the SAME value here or the lock will be stranded.
+#   TASK_ENV=$(jq -r '.env // "dev"' "$STATE_FILE")
+#
+#   acquire_stack_lock "$STACK" "$TASK_ENV" || {
 #     echo "deploy: stack '$STACK' is already being deployed; aborting" >&2
 #     exit 1
 #   }
@@ -26,7 +32,7 @@
 #   # without the usual "held by a different PID" warning. The disowned cdk
 #   # process's PID lives in the deploy-status JSON instead.
 #   REPO_ROOT=$(git rev-parse --show-toplevel)
-#   echo "orchestrator:external" > "$REPO_ROOT/.claude/state/cdk-stack-locks/${STACK}.lock.d/pid"
+#   echo "orchestrator:external" > "$REPO_ROOT/.claude/state/${TASK_ENV}/cdk-stack-locks/${STACK}.lock.d/pid"
 #
 #   LOG=".claude/state/deploy-status-${TASK_NUM}.log"
 #   nohup cdk deploy "$STACK" --require-approval never >"$LOG" 2>&1 &
@@ -321,20 +327,10 @@ for status_file in "${STATUS_FILES[@]}"; do
 
   echo "deploy-watch: task $task_num — status file updated to '$local_new_status'"
 
-  # --- Release the stack lock (worker held it; we release it on completion) ---
-  release_stack_lock "$stack" \
-    || echo "deploy-watch: task $task_num — warning: could not release stack lock for '$stack'" >&2
-
-  # --- Post PR comment if pr is not null ---
-  if [ "$pr_num" != "null" ] && [ -n "$pr_num" ]; then
-    post_pr_comment "$pr_num" "$task_num" "$stack" \
-      "$started_at" "$finished_at" "$local_new_status" "$log_file"
-  else
-    echo "deploy-watch: task $task_num — no PR number; skipping comment"
-  fi
-
-  # --- Update the plan state file ---
-  # Find the state file for this plan ID.
+  # --- Locate the plan state file (needed for both lock release env lookup
+  #     AND the task-status update below). Done BEFORE release_stack_lock so
+  #     the env is propagated correctly — T12 made stack locks per-env, and
+  #     omitting env causes release to look at the wrong (default "dev") path.
   plan_state_file=""
 
   # Try the active plan first (most common case).
@@ -360,6 +356,29 @@ for status_file in "${STATUS_FILES[@]}"; do
     done
   fi
 
+  # --- Read env from the plan state file for stack-lock release.
+  # T12: stack locks live at .claude/state/<env>/cdk-stack-locks/. The worker
+  # acquired the lock with the plan's env, so the release MUST pass the same
+  # env. If the state file is missing or has no env field, fall back to "dev"
+  # — same default as acquire_stack_lock. A wrong env here strands the lock.
+  task_env="dev"
+  if [ -n "$plan_state_file" ] && [ -f "$plan_state_file" ]; then
+    task_env=$(jq -r '.env // "dev"' "$plan_state_file" 2>/dev/null || echo "dev")
+  fi
+
+  # --- Release the stack lock (worker held it; we release it on completion) ---
+  release_stack_lock "$stack" "$task_env" \
+    || echo "deploy-watch: task $task_num — warning: could not release stack lock for '$stack' (env=$task_env)" >&2
+
+  # --- Post PR comment if pr is not null ---
+  if [ "$pr_num" != "null" ] && [ -n "$pr_num" ]; then
+    post_pr_comment "$pr_num" "$task_num" "$stack" \
+      "$started_at" "$finished_at" "$local_new_status" "$log_file"
+  else
+    echo "deploy-watch: task $task_num — no PR number; skipping comment"
+  fi
+
+  # --- Update the plan state file ---
   if [ -z "$plan_state_file" ]; then
     echo "deploy-watch: task $task_num — warning: could not find plan state file for plan '$plan_id'; skipping state update" >&2
     ERRORS=$((ERRORS + 1))

@@ -54,10 +54,13 @@ _peek_candidate=$(
 )
 if [ -n "$_peek_candidate" ]; then
   TICK_ENV=$(jq -r '.env // "dev"' "$_peek_candidate" 2>/dev/null || echo "dev")
-  # Guard: env must be a safe directory component (no slashes, no dots-only).
-  if [[ ! "$TICK_ENV" =~ ^[A-Za-z0-9_-]+$ ]]; then
-    echo "orchestrator: invalid env value '$TICK_ENV' in $_peek_candidate — defaulting to 'dev'" >&2
-    TICK_ENV="dev"
+  # Guard: env must be one of the allowlisted values. This MUST match the
+  # ingest-plan.sh allowlist (dev|staging|prod) — a manually-edited state file
+  # with any other value would otherwise silently land at a non-canonical
+  # lock path and bypass the upstream validation.
+  if [[ ! "$TICK_ENV" =~ ^(dev|staging|prod)$ ]]; then
+    echo "orchestrator: invalid env value '$TICK_ENV' in $_peek_candidate (allowed: dev|staging|prod); aborting tick" >&2
+    exit 1
   fi
 fi
 

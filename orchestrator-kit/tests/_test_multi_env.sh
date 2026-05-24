@@ -174,6 +174,50 @@ rm -rf "${REPO_ROOT:?}/$dev_orch_lock" "${REPO_ROOT:?}/$staging_orch_lock"
 pass "both orchestrator lock dirs cleaned up"
 
 # ---------------------------------------------------------------------------
+# Scenario 6: orchestrator.sh env regex matches T2's ingest allowlist
+# ---------------------------------------------------------------------------
+# A manually-edited state file with env outside {dev,staging,prod} must be
+# rejected by orchestrator.sh's startup guard. We exercise the same regex
+# orchestrator.sh uses rather than invoking the script in full (which would
+# need a wired-up plan + gh auth).
+echo "--- Scenario 6: env allowlist matches ingest-plan.sh ---"
+
+check_env_allowed() {
+  local val="$1"
+  if [[ "$val" =~ ^(dev|staging|prod)$ ]]; then
+    return 0
+  fi
+  return 1
+}
+
+# Valid values — must pass.
+for ok in dev staging prod; do
+  if check_env_allowed "$ok"; then
+    pass "env '$ok' accepted (canonical)"
+  else
+    fail "env '$ok' rejected (should be accepted)"
+  fi
+done
+
+# Invalid values — must be rejected, including the example from the review
+# feedback (`production`) and other shapes the OLD looser regex would accept.
+for bad in production feature-1 test PROD "" "dev/evil" ".."; do
+  if check_env_allowed "$bad"; then
+    fail "env '$bad' accepted (should be rejected)"
+  else
+    pass "env '$bad' rejected (non-canonical)"
+  fi
+done
+
+# Sanity: confirm orchestrator.sh actually contains the tightened regex.
+# This catches accidental drift between the test and the real code.
+if grep -qE '\^\(dev\|staging\|prod\)\$' "$KIT_ROOT/orchestrator.sh"; then
+  pass "orchestrator.sh contains tightened env regex ^(dev|staging|prod)\$"
+else
+  fail "orchestrator.sh missing tightened env regex"
+fi
+
+# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 echo ""
