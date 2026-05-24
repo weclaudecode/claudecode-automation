@@ -28,7 +28,40 @@ cd "$REPO"
 # shellcheck source=.claude/scripts/_dispatcher_lib.sh
 source "$REPO/.claude/scripts/_dispatcher_lib.sh"
 
-LOCKDIR=".claude/state/orchestrator.lock"
+# ---- Determine TICK_ENV before lock acquisition ----
+# Peek at the newest in_progress plan (without holding any lock) to read
+# its `env` field. This lets us build an env-namespaced lock path so that
+# concurrent ticks for different envs (e.g. dev vs staging) never contend
+# on the same lock directory.
+#
+# If no in_progress plan exists yet, default to "dev". The actual plan
+# selection happens again inside Phase 0 after the lock is held, so this
+# peek is only used for lock-path construction.
+#
+# Migration note: pre-T12 installs used `.claude/state/orchestrator.lock/`
+# (no env prefix). That path is now abandoned. Operators upgrading from a
+# pre-T12 kit should run: rm -rf .claude/state/orchestrator.lock
+# if a stale lock is left from an older tick.
+TICK_ENV="dev"
+_peek_candidate=$(
+  ls -t .claude/plans/*.state.json 2>/dev/null \
+    | while IFS= read -r _f; do
+        if jq -er '.status == "in_progress"' "$_f" >/dev/null 2>&1; then
+          echo "$_f"
+          break
+        fi
+      done | head -1
+)
+if [ -n "$_peek_candidate" ]; then
+  TICK_ENV=$(jq -r '.env // "dev"' "$_peek_candidate" 2>/dev/null || echo "dev")
+  # Guard: env must be a safe directory component (no slashes, no dots-only).
+  if [[ ! "$TICK_ENV" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "orchestrator: invalid env value '$TICK_ENV' in $_peek_candidate — defaulting to 'dev'" >&2
+    TICK_ENV="dev"
+  fi
+fi
+
+LOCKDIR=$(get_orchestrator_lock_path "$TICK_ENV")
 LOG=".claude/state/orchestrator.log"
 NOTIFY=".claude/scripts/notify.sh"
 MAX_PARALLEL="${ORCH_MAX_PARALLEL:-1}"
@@ -40,7 +73,7 @@ LOG_MAX_BYTES="${ORCH_LOG_MAX_BYTES:-10485760}"  # 10 MiB default
 AUTO_RECOMMENDED="${ORCH_AUTO_RECOMMENDED:-0}"
 export ORCH_AUTO_RECOMMENDED="$AUTO_RECOMMENDED"
 
-mkdir -p .claude/state .claude/plans/archive
+mkdir -p ".claude/state/${TICK_ENV}" .claude/state .claude/plans/archive
 
 # Combined cleanup for normal exit AND signal interruption.
 # - Removes any worktrees still registered in the active manifest. Workers
@@ -150,7 +183,7 @@ fi
 # tick headers (issue #2).
 EFFECTIVE_AUTO_RECOMMENDED=$(resolve_auto_recommended "$STATE_FILE")
 
-echo "plan: $PLAN_FILE  total: $TOTAL  max_parallel: $MAX_PARALLEL  auto_recommended: $EFFECTIVE_AUTO_RECOMMENDED  repo: $REPO_OWNER_REPO"
+echo "plan: $PLAN_FILE  env: $TICK_ENV  total: $TOTAL  max_parallel: $MAX_PARALLEL  auto_recommended: $EFFECTIVE_AUTO_RECOMMENDED  repo: $REPO_OWNER_REPO"
 
 # ---- Pre-flight operator gate (Task 4) ----
 # If the active plan's state contains a pre_flight block, check for the

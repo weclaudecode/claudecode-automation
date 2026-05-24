@@ -313,9 +313,19 @@ resolve_auto_recommended() {
   esac
 }
 
+# ---- get_orchestrator_lock_path ----
+# Return the env-namespaced orchestrator tick lock path.
+# Usage:
+#   lock_path=$(get_orchestrator_lock_path <env>)
+# env defaults to "dev" if empty or unset.
+get_orchestrator_lock_path() {
+  local env="${1:-dev}"
+  echo ".claude/state/${env}/orchestrator.lock"
+}
+
 # ---- acquire_stack_lock / release_stack_lock ----
 # Per-stack deploy lock to serialize workers that touch the same
-# CloudFormation stack. Lock dir: .claude/state/cdk-stack-locks/<name>.lock.d/
+# CloudFormation stack. Lock dir: .claude/state/<env>/cdk-stack-locks/<name>.lock.d/
 # with a PID file inside, mirroring state_write's lock pattern.
 #
 # Design choice: FAIL-FAST. If the lock is held by a live process,
@@ -326,20 +336,32 @@ resolve_auto_recommended() {
 # Idempotent on same-PID reacquire: a process that already holds the lock
 # can call acquire_stack_lock again and will get exit 0.
 #
-# acquire_stack_lock <stack-name>
+# acquire_stack_lock <stack-name> [env]
+#   env defaults to "dev" if omitted.
 #   Returns:
 #     0 — lock acquired (or already held by $$)
 #     1 — lock held by a live process (not us)
 #
-# release_stack_lock <stack-name>
+# release_stack_lock <stack-name> [env]
+#   env defaults to "dev" if omitted.
 #   Returns:
 #     0 — lock released (or already absent)
 #     1 — lock held by a different live PID (won't break it)
 
+# _STACK_LOCK_BASE is kept for backward-compat reference but is no longer
+# used directly — callers always go through _stack_lock_base_for_env().
 _STACK_LOCK_BASE=".claude/state/cdk-stack-locks"
+
+# Build the per-env base path for stack locks.
+# Separate function so it's easily testable and consistent between acquire/release.
+_stack_lock_base_for_env() {
+  local env="${1:-dev}"
+  echo ".claude/state/${env}/cdk-stack-locks"
+}
 
 acquire_stack_lock() {
   local stack_name="$1"
+  local env="${2:-dev}"
   if [ -z "$stack_name" ]; then
     echo "acquire_stack_lock: stack-name required" >&2
     return 1
@@ -363,7 +385,9 @@ acquire_stack_lock() {
     return 1
   }
 
-  local lockdir="$repo_root/$_STACK_LOCK_BASE/${stack_name}.lock.d"
+  local _lock_base
+  _lock_base=$(_stack_lock_base_for_env "$env")
+  local lockdir="$repo_root/$_lock_base/${stack_name}.lock.d"
   mkdir -p "$(dirname "$lockdir")"
 
   # Try to create the lock atomically.
@@ -409,6 +433,7 @@ acquire_stack_lock() {
 
 release_stack_lock() {
   local stack_name="$1"
+  local env="${2:-dev}"
   if [ -z "$stack_name" ]; then
     echo "release_stack_lock: stack-name required" >&2
     return 1
@@ -429,7 +454,9 @@ release_stack_lock() {
     return 1
   }
 
-  local lockdir="$repo_root/$_STACK_LOCK_BASE/${stack_name}.lock.d"
+  local _lock_base
+  _lock_base=$(_stack_lock_base_for_env "$env")
+  local lockdir="$repo_root/$_lock_base/${stack_name}.lock.d"
 
   # No lock dir — idempotent success (already released or never acquired).
   [ -d "$lockdir" ] || return 0

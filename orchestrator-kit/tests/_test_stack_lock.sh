@@ -32,7 +32,9 @@ cd "$KIT_ROOT" || exit 1
 # shellcheck source=../orchestrator-kit/.claude/scripts/_dispatcher_lib.sh
 source "$LIB"
 
-LOCK_BASE="$(git rev-parse --show-toplevel)/.claude/state/cdk-stack-locks"
+# All scenarios use a test env to avoid touching the "dev" namespace.
+TEST_ENV="test"
+LOCK_BASE="$(git rev-parse --show-toplevel)/.claude/state/${TEST_ENV}/cdk-stack-locks"
 STACK="test_stack_$$"
 
 cleanup() {
@@ -45,7 +47,7 @@ trap cleanup EXIT INT TERM
 # ---------------------------------------------------------------------------
 echo "--- Scenario 1: basic acquire + release ---"
 
-if acquire_stack_lock "$STACK"; then
+if acquire_stack_lock "$STACK" "$TEST_ENV"; then
   pass "acquire_stack_lock: initial acquire succeeded"
 else
   fail "acquire_stack_lock: initial acquire returned non-zero"
@@ -65,7 +67,7 @@ else
   fail "PID file contains '$pid_in_file', expected $$"
 fi
 
-if release_stack_lock "$STACK"; then
+if release_stack_lock "$STACK" "$TEST_ENV"; then
   pass "release_stack_lock: release succeeded"
 else
   fail "release_stack_lock: release returned non-zero"
@@ -82,19 +84,19 @@ fi
 # ---------------------------------------------------------------------------
 echo "--- Scenario 2: same-PID idempotency ---"
 
-if acquire_stack_lock "$STACK"; then
+if acquire_stack_lock "$STACK" "$TEST_ENV"; then
   pass "acquire 1st: success"
 else
   fail "acquire 1st: failed unexpectedly"
 fi
 
-if acquire_stack_lock "$STACK"; then
+if acquire_stack_lock "$STACK" "$TEST_ENV"; then
   pass "acquire 2nd (same PID): idempotent success"
 else
   fail "acquire 2nd (same PID): returned non-zero (expected 0)"
 fi
 
-if release_stack_lock "$STACK"; then
+if release_stack_lock "$STACK" "$TEST_ENV"; then
   pass "release after double-acquire: success"
 else
   fail "release after double-acquire: failed"
@@ -112,9 +114,9 @@ echo "--- Scenario 3: parallel contention (fail-fast) ---"
 # PID from the test script's $$, so the fail-fast path is exercised.
 bash -c "
   source '$LIB'
-  acquire_stack_lock '$STACK' >/dev/null 2>&1
+  acquire_stack_lock '$STACK' '$TEST_ENV' >/dev/null 2>&1
   sleep 2
-  release_stack_lock '$STACK' >/dev/null 2>&1
+  release_stack_lock '$STACK' '$TEST_ENV' >/dev/null 2>&1
 " &
 HOLDER_PID=$!
 
@@ -122,7 +124,7 @@ HOLDER_PID=$!
 sleep 0.2
 
 # Parent (different PID from the subshell) tries to acquire — must fail.
-if acquire_stack_lock "$STACK" 2>/dev/null; then
+if acquire_stack_lock "$STACK" "$TEST_ENV" 2>/dev/null; then
   fail "parallel acquire should have been blocked (fail-fast), but succeeded"
 else
   pass "parallel acquire correctly returned exit 1 (fail-fast)"
@@ -132,12 +134,12 @@ fi
 wait "$HOLDER_PID" 2>/dev/null || true
 
 # Now the lock should be gone; parent can acquire.
-if acquire_stack_lock "$STACK"; then
+if acquire_stack_lock "$STACK" "$TEST_ENV"; then
   pass "acquire after holder released: success"
 else
   fail "acquire after holder released: failed"
 fi
-release_stack_lock "$STACK"
+release_stack_lock "$STACK" "$TEST_ENV"
 
 # ---------------------------------------------------------------------------
 # Scenario 4: stale-PID break
@@ -149,7 +151,7 @@ mkdir -p "$lockdir"
 DEAD_PID=99999999   # extremely unlikely to be a live PID
 echo "$DEAD_PID" > "$lockdir/pid"
 
-if acquire_stack_lock "$STACK" 2>/dev/null; then
+if acquire_stack_lock "$STACK" "$TEST_ENV" 2>/dev/null; then
   pass "stale-PID broken and lock acquired"
 else
   fail "stale-PID break failed — acquire returned non-zero"
@@ -162,7 +164,7 @@ else
   fail "PID file is '$pid_in_file', expected $$ after stale break"
 fi
 
-release_stack_lock "$STACK"
+release_stack_lock "$STACK" "$TEST_ENV"
 
 # ---------------------------------------------------------------------------
 # Scenario 5: path-traversal / invalid-name rejection
@@ -184,13 +186,13 @@ BAD_NAMES=(
 )
 
 for bad in "${BAD_NAMES[@]}"; do
-  if acquire_stack_lock "$bad" 2>/dev/null; then
+  if acquire_stack_lock "$bad" "$TEST_ENV" 2>/dev/null; then
     fail "acquire_stack_lock accepted invalid name: '$bad'"
-    release_stack_lock "$bad" 2>/dev/null || true
+    release_stack_lock "$bad" "$TEST_ENV" 2>/dev/null || true
   else
     pass "acquire_stack_lock rejected invalid name: '$bad'"
   fi
-  if release_stack_lock "$bad" 2>/dev/null; then
+  if release_stack_lock "$bad" "$TEST_ENV" 2>/dev/null; then
     fail "release_stack_lock accepted invalid name: '$bad'"
   else
     pass "release_stack_lock rejected invalid name: '$bad'"
