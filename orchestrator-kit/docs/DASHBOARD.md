@@ -12,16 +12,18 @@ From the repo root where the kit is installed:
 ./.claude/scripts/dashboard.sh start
 ```
 
-Then open `http://127.0.0.1:5174/` in a browser. Six panels render the
+Then open `http://127.0.0.1:5174/` in a browser. An alerts strip at
+the top promotes anything actionable; six panels below render the
 current state:
 
-| Panel       | Source                                           |
-|-------------|--------------------------------------------------|
-| Plan Status | active `.claude/plans/*.state.json`              |
-| Logs        | `.claude/state/orchestrator.log` (tail)          |
-| Issues + PRs| `gh issue list` + `gh pr list` (30s cache)       |
-| Workers     | `ps` for `claude -p` + active-worktrees manifest |
-| Config      | env vars + `.claude/settings.json` + plan state  |
+| Surface      | Source                                                  |
+|--------------|---------------------------------------------------------|
+| Alerts strip | union of blocked-task / needs-robbie / monitor / dead-orchestrator (see below) |
+| Plan Status  | active `.claude/plans/*.state.json`                     |
+| Logs         | `.claude/state/orchestrator.log` (tail)                 |
+| Issues + PRs | `gh issue list` + `gh pr list` (30s cache, with CI dot) |
+| Workers      | `ps` for `claude -p` + active-worktrees manifest        |
+| Config       | env vars + `.claude/settings.json` + plan state         |
 
 To stop:
 
@@ -33,11 +35,30 @@ Other subcommands: `status`, `restart`, `--help`.
 
 ## What each panel shows
 
+**Alerts strip** — sits between the header and the panel grid. Hidden
+when empty. Surfaces four alert kinds that would otherwise be buried
+in the regular panels:
+
+| Kind                 | Source                                         | Severity                                    |
+|----------------------|------------------------------------------------|---------------------------------------------|
+| `blocked`            | tasks with `status: blocked` in active state   | `error`                                     |
+| `needs_robbie`       | open PRs labelled `orch:needs-robbie`          | `warn`                                      |
+| `monitor`            | open issues labelled `monitor:finding`         | `warn` if H1/H2/H4 in title, else `info`    |
+| `dead_orchestrator`  | no `=== tick ===` line for > 2× expected interval | `error`                                  |
+
+Each card shows a severity glyph (❗/⚠/ⓘ), one-line summary, "since"
+relative time, optional open-link, and a ❓ button that pops the
+suggested action with a copy-to-clipboard option. The strip
+auto-expands when any alert is `error`-severity; otherwise it renders
+collapsed with a count summary.
+
 **Plan Status** — current active plan (newest `in_progress` state file),
 total tasks, plus a per-task table with status, dependencies, touches,
 issue/PR numbers, retries, and (where applicable) `blocked_reason` or
 `merged_at`. Task rows are colour-coded by status (pending=gray,
-in_progress=blue, in_review=yellow, merged=green, blocked=red).
+in_progress=blue, in_review=yellow, merged=green, blocked=red). Blocked
+tasks get a ❓ icon next to `blocked_reason` that pops the matching
+runbook entry (see [Runbook hints](#runbook-hints)).
 
 **Logs** — last 200 lines of `orchestrator.log`. Tick boundaries
 (`=== tick <iso> ===`) and phase boundaries (`--- phase N ---`) are
@@ -48,6 +69,15 @@ scrolls up — scrolling back to the bottom re-engages auto-scroll.
 **Issues + PRs** — open GitHub issues (most recent 50) and recent PRs
 (most recent 30, both merged and open). Backed by `gh` CLI with a 30s
 in-memory cache so the 5s frontend poll doesn't hammer the GitHub API.
+Each PR row is prefixed by a CI status dot derived from
+`statusCheckRollup`:
+
+| `ci_state` | Glyph | Meaning                                                       |
+|------------|-------|---------------------------------------------------------------|
+| `SUCCESS`  | ● green | All checks passed                                           |
+| `FAILURE`  | ● red   | At least one check is failure/error/cancelled/timed-out     |
+| `PENDING`  | ◐ yellow | At least one check is pending or in-progress (no failures) |
+| `null`     | — gray | No CI checks configured for this PR                          |
 
 **Workers** — active `claude -p` processes (matched via `ps`) and active
 worktrees from `.claude/state/active_worktrees.txt` (filtered to entries
@@ -62,7 +92,45 @@ value's source (env var, default, `.claude/settings.json`, or per-plan
 state). See [Tunables](#tunables) for the canonical list.
 
 **Header strip** — active plan slug + tick counter (derived from log
-parse) + global pause-polling toggle.
+parse) + global pause-polling toggle + `?` button that opens the
+in-app help overlay.
+
+## Runbook hints
+
+Several places in the UI render a small ❓ help icon: blocked task
+rows, panel fetch errors, and soft envelope warnings. Clicking pops a
+short remediation snippet pulled from `static/runbook.js`.
+
+Current runbook keys:
+
+| Key                          | When it fires                                                 |
+|------------------------------|---------------------------------------------------------------|
+| `worker_failed_3x`           | task block from 3× worker failure                             |
+| `iterate_failed_3x`          | task block from 3× iterator failure                           |
+| `review_iter_cap`            | task block from review loop hitting `ORCH_MAX_TURNS`          |
+| `pr_closed_unmerged`         | task block because PR closed without merging                  |
+| `upstream_blocked_t<N>`      | cascade block (matched via prefix, any N)                     |
+| `gh CLI not found`           | panel fetch error from missing `gh` binary                    |
+| `gh timed out`               | panel fetch error from `gh` subprocess timeout                |
+| `ps timed out`               | workers panel timed out reading the process table             |
+| `state file unreadable`      | plan panel can't parse the active `*.state.json`              |
+| `fetch failed`               | browser couldn't reach the Flask backend                      |
+
+Add a key by appending an entry in `runbook.js` and (optionally)
+extending the table above. The popover supports up to ~8 lines per
+entry comfortably.
+
+## Keyboard shortcuts
+
+| Key   | Action                                   |
+|-------|------------------------------------------|
+| `r`   | refresh all panels                       |
+| `p`   | toggle polling (pause / resume)          |
+| `?`   | open / close the help overlay            |
+| `Esc` | close any open popover or the help overlay |
+
+The same keys are listed inside the help overlay so first-time
+operators don't need to find them in this file.
 
 ## Tunables
 
@@ -79,6 +147,7 @@ docs).
 | `ORCH_AUTO_RECOMMENDED`  | `0`         | Default auto-resolve for ambiguous decisions               |
 | `ORCH_LOG_MAX_BYTES`     | `10485760`  | Log rotation threshold (bytes — default 10 MiB)            |
 | `ORCH_DASHBOARD_PORT`    | `5174`      | Port the dashboard listens on (`127.0.0.1` only)           |
+| `ORCH_DASHBOARD_EXPECTED_TICK_MINUTES` | `5` | Expected cron interval; `dead_orchestrator` alert fires when no tick line has appeared in 2× this value |
 
 Per-plan overrides surfaced under `source: plan-state`:
 
@@ -124,9 +193,10 @@ other panels.
 | Endpoint        | Method | Query params                     | Source                                  |
 |-----------------|--------|----------------------------------|-----------------------------------------|
 | `/api/healthz`  | GET    | —                                | trivial liveness probe                  |
+| `/api/alerts`   | GET    | —                                | blocked tasks + `orch:needs-robbie` PRs + `monitor:finding` issues + dead-orch detector |
 | `/api/plan`     | GET    | —                                | newest `*.state.json` with `in_progress` |
 | `/api/logs`     | GET    | `lines`, `since`, `include_rotated` | `.claude/state/orchestrator.log`    |
-| `/api/github`   | GET    | —                                | `gh issue list` + `gh pr list` (30s cache) |
+| `/api/github`   | GET    | —                                | `gh issue list` + `gh pr list` (30s cache; `ci_state` per PR) |
 | `/api/workers`  | GET    | —                                | `ps` + active-worktrees manifest        |
 | `/api/config`   | GET    | —                                | env + settings.json + plan state        |
 
@@ -141,6 +211,9 @@ curl 'http://127.0.0.1:5174/api/logs?lines=20'
 
 curl 'http://127.0.0.1:5174/api/logs?lines=3000'
 # → {"data": null, "error": "too many lines requested (max 2000)", ...}
+
+curl http://127.0.0.1:5174/api/alerts
+# → {"data": {"alerts": [{"id": "blocked:...", "severity": "error", ...}, ...]}, ...}
 ```
 
 ## Stopping the dashboard
