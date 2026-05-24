@@ -93,12 +93,42 @@ fi
 # before any phase runs — otherwise the surviving worktrees pile up.
 cleanup_active_worktrees 2>/dev/null || true
 
-STATE_FILE=$(ls -t .claude/plans/*.state.json 2>/dev/null \
-  | xargs -I {} sh -c 'jq -er ".status == \"in_progress\"" {} >/dev/null 2>&1 && echo {}' \
-  | tail -1)
+# ---- Plan promotion: pick newest in_progress plan whose requires are met ----
+# For each candidate (newest-first), call plan-promote.sh to verify that all
+# plans listed in the candidate's `requires` field have status: done in their
+# archived state files. The first candidate that passes becomes ACTIVE_STATE_FILE.
+#
+# Exit codes from plan-promote.sh:
+#   0 — plan ready to run (no unmet requires)
+#   1 — plan waiting on upstream (logged by plan-promote.sh itself)
+#   2 — hard error (malformed state / missing jq) — halt tick immediately
+STATE_FILE=""
+# shellcheck disable=SC2012  # ls -t needed for mtime sort; filenames are well-controlled
+_in_progress_candidates() {
+  ls -t .claude/plans/*.state.json 2>/dev/null \
+    | while IFS= read -r _f; do
+        if jq -er '.status == "in_progress"' "$_f" >/dev/null 2>&1; then
+          echo "$_f"
+        fi
+      done
+}
+while IFS= read -r _candidate; do
+  bash .claude/scripts/plan-promote.sh "$_candidate"
+  _promote_rc=$?
+  if [ "$_promote_rc" = "0" ]; then
+    STATE_FILE="$_candidate"
+    break
+  elif [ "$_promote_rc" = "1" ]; then
+    # plan-promote.sh already logged the reason; try the next candidate
+    continue
+  else
+    echo "tick: plan-promote.sh error (rc=$_promote_rc) on $_candidate, halting" >&2
+    exit "$_promote_rc"
+  fi
+done < <(_in_progress_candidates)
 
 if [ -z "$STATE_FILE" ]; then
-  echo "no active plan, idle"
+  echo "no active plan, idle (all waiting on requires or none in_progress)"
   exit 0
 fi
 
