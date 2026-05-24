@@ -67,8 +67,11 @@ Frontmatter is written as a standard YAML block at the very top of the
 file: `---` on line 1, key/value lines, and a closing `---` on its own
 line, before the `# Plan title` heading. This is the same syntax
 `ingest-plan.sh` already uses to read `auto_recommended`. All fields are
-optional unless otherwise noted. Unknown keys are silently ignored by
-`ingest-plan.sh` to permit forward compatibility.
+optional unless otherwise noted. Unknown keys are **rejected** by
+`ingest-plan.sh` with a clear error naming the offending key — silent
+acceptance is the precise failure mode this kit has been bitten by
+before (see prior incidents involving typo'd field names that silently
+no-op'd). Add new keys only after updating this spec and the parser.
 
 ```markdown
 ---
