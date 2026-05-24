@@ -142,6 +142,18 @@ if [ -z "$PR_DIFF" ]; then
   exit 1
 fi
 
+# Persist the diff so the parallel pr-review-toolkit subagents can each
+# Read it once instead of getting it inlined six times in their prompts.
+# Path is namespaced by PR + HEAD sha so concurrent reviews on different
+# PRs don't trample each other.
+DIFF_DIR="$REPO_ROOT/.claude/state"
+mkdir -p "$DIFF_DIR"
+DIFF_PATH="$DIFF_DIR/review-pr${PR_NUM}-sha${HEAD_OID:0:12}.diff"
+printf '%s\n' "$PR_DIFF" > "$DIFF_PATH" || {
+  echo "review-pr: failed to write diff to $DIFF_PATH" >&2
+  exit 1
+}
+
 # ---- Read prior iteration count from PR body ----
 PRIOR_ITER=$(echo "$PR_BODY" | grep -oE 'orch:review-iter:[0-9]+' | head -1 | grep -oE '[0-9]+' || echo "0")
 NEW_ITER=$((PRIOR_ITER + 1))
@@ -158,29 +170,29 @@ $(cat "$REVIEWER_SYSTEM")
 
 ---
 
+## Coordinator inputs
+
+- REPO_SLUG: $REPO
+- PR_NUM:    $PR_NUM
+- DIFF_PATH: $DIFF_PATH
+- Iteration: $NEW_ITER
+
 ## Task spec (verbatim from plan)
 
 $TASK_SPEC
 
 ---
 
-## PR diff (vs base branch)
-
-\`\`\`diff
-$PR_DIFF
-\`\`\`
-
----
-
 ## Reminder
 
-Return ONLY the JSON object specified above. No prose, no markdown fences
-around it. Iteration $NEW_ITER of this PR.
+Dispatch the six pr-review-toolkit specialists in parallel via Task, plus
+\`/security-review\` via Skill. Aggregate. Return ONLY the JSON verdict
+object specified above. No prose, no markdown fences around it.
 EOF
 )
 
 # ---- Spawn reviewer ----
-REVIEWER_MODEL="${ORCH_REVIEWER_MODEL:-sonnet}"
+REVIEWER_MODEL="${ORCH_REVIEWER_MODEL:-opus}"
 REVIEWER_MAX_TURNS="${ORCH_REVIEWER_MAX_TURNS:-20}"
 REVIEWER_TIMEOUT="${ORCH_REVIEWER_TIMEOUT:-300}"
 TIMEOUT_CMD=$(find_timeout_cmd)

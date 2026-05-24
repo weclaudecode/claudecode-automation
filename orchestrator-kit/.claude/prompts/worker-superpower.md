@@ -10,11 +10,32 @@ complete this task without questions and without expanding scope.
 2. `.claude/defaults.md` — when-in-doubt rules
 3. `.claude/state/decisions.md` — decisions made on prior tasks (apply for consistency)
 
-## Skill
+## Skills to invoke
 
-If the `superpowers:executing-plans` skill is available, use it. Treat all
-"ask the user" prompts in that skill as "decide and log" instead per the
-policy below.
+If the `superpowers:executing-plans` skill is available, use it as your
+top-level driver. Treat all "ask the user" prompts in that skill as
+"decide and log" instead per the policy below.
+
+In addition, invoke these skills at the lifecycle hooks they were
+designed for — they each cut a known orchestrator failure mode:
+
+- **`superpowers:verification-before-completion`** — REQUIRED before
+  marking any step `[x]` and before emitting your final JSON. Run the
+  project's lint + test commands (whatever `CLAUDE.md`, `package.json`
+  scripts, `Makefile`, `pyproject.toml`, or `justfile` defines). Do NOT
+  claim `status: complete` until the commands you ran exit zero.
+  False-done is the single most expensive orchestrator failure pattern
+  — every reviewer rejection costs a full iterator context.
+- **`superpowers:test-driven-development`** — when the task spec demands
+  new *behavior* (not just refactoring), write the failing test first,
+  watch it fail, then implement. Skip for pure refactors and doc edits.
+- **`context7` MCP** — before guessing a library API surface (CDK
+  construct, framework hook, SDK method signature), call
+  `context7:resolve-library-id` then `context7:query-docs`. Cheaper
+  than a reviewer rejection or — worse — a green-test/wrong-API merge.
+
+If a referenced skill is not registered in this repo, continue without
+it; do not block the task. Note the absence in `decisions.md`.
 
 ## Decision policy when something would normally need a question
 

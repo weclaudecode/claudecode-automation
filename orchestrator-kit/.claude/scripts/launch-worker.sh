@@ -139,7 +139,7 @@ if [ -z "$TASK_CONTENT" ]; then
   exit 1
 fi
 
-WORKER_MODEL="${ORCH_WORKER_MODEL:-sonnet}"
+WORKER_MODEL="${ORCH_WORKER_MODEL:-opus}"
 
 # 5.7a: precedence per-task plan value > $ORCH_MAX_TURNS env > default 30.
 # Use has() rather than `// 30` because jq's // triggers on 0 as well as

@@ -268,7 +268,7 @@ ITER_SYSTEM="$REPO/.claude/prompts/iterator-system.md"
 RUN_OUT="$REPO/.claude/state/iter-plan${PLAN_NUM}-t${TASK_NUM}-i${NEW_ITER}-r${RETRIES}.json"
 mkdir -p "$(dirname "$RUN_OUT")"
 
-WORKER_MODEL="${ORCH_WORKER_MODEL:-sonnet}"
+WORKER_MODEL="${ORCH_WORKER_MODEL:-opus}"
 MAX_TURNS="${ORCH_MAX_TURNS:-30}"
 WORKER_TIMEOUT="${ORCH_WORKER_TIMEOUT:-600}"
 TIMEOUT_CMD=$(find_timeout_cmd)

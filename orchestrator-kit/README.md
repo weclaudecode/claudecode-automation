@@ -13,6 +13,13 @@ pre-push review and conditional auto-merge.
   syntax used by the sensitive-pattern detector, so without gawk every plan
   ingests with `auto_merge_overrides: {}` and IAM/migration tasks would
   auto-merge.
+- **`pr-review-toolkit` plugin** — required. The reviewer (`review-pr.sh`)
+  runs as a multi-agent coordinator that dispatches the toolkit's six
+  specialist subagents (`code-reviewer`, `silent-failure-hunter`,
+  `comment-analyzer`, `pr-test-analyzer`, `type-design-analyzer`, plus
+  `/security-review`) in parallel. Without the plugin installed in the
+  target repo, the reviewer degrades to an inline review (still functional,
+  weaker signal). Install with `claude plugin install pr-review-toolkit`.
 - A GitHub repo with `main` branch and branch protection allowing `--auto` merges
 - Optional: cron / launchd for scheduled triggers
 - Optional: `python3 >= 3.11` — only needed if you use the [local dashboard](docs/DASHBOARD.md)
@@ -108,7 +115,14 @@ add a `permissions.allow` block; under bypass it has no effect.
 Safety comes from the layers around the worker, not from sandboxing it:
 
 - **Reviewer phase** (`review-pr.sh`) blocks PRs that contain `safety_block`
-  findings — IAM widenings, destructive migrations, secrets in diffs.
+  findings — IAM widenings, destructive migrations, secrets in diffs. The
+  reviewer is a multi-agent coordinator: it dispatches the six
+  `pr-review-toolkit` specialists (`code-reviewer`, `silent-failure-hunter`,
+  `comment-analyzer`, `pr-test-analyzer`, `type-design-analyzer`) plus
+  `/security-review` in parallel, then synthesizes their findings into the
+  JSON verdict the dispatcher's FSM keys on. If the `pr-review-toolkit`
+  plugin isn't installed, the coordinator degrades to an inline review
+  (still produces a JSON verdict; loses the multi-perspective signal).
 - **Sensitive tasks** flagged at ingest time land in `auto_merge_overrides`
   and skip `--auto`; merging requires a human.
 - **Iter cap** (`ORCH_MAX_TURNS`, retry limit) halts runaway workers.
@@ -120,12 +134,13 @@ not in a multi-tenant or shared-credential environment.
 
 Two env vars override defaults (set in your cron line or shell profile):
 
-| Var                  | Default  | Notes                                                    |
-|----------------------|----------|----------------------------------------------------------|
-| `ORCH_WORKER_MODEL`  | `sonnet` | Set to `opus` for plans known to need stronger reasoning |
-| `ORCH_MAX_TURNS`     | `30`     | Reviewer-block iterations × ~3 turns each                |
-| `ORCH_LOG_MAX_BYTES` | `10485760` | Log rotation threshold (default 10 MiB)                |
-| `ORCH_DASHBOARD_PORT`| `5174`   | Port the optional [local dashboard](docs/DASHBOARD.md) binds to (127.0.0.1 only) |
+| Var                   | Default  | Notes                                                    |
+|-----------------------|----------|----------------------------------------------------------|
+| `ORCH_WORKER_MODEL`   | `opus`   | Implementation default. Set to `sonnet` to cut per-task cost ~5× on plans you trust to be simple. |
+| `ORCH_REVIEWER_MODEL` | `opus`   | Top-level reviewer coordinator. The 6 `pr-review-toolkit` specialists each pick their own model; only the coordinator's tokens change. Drop to `sonnet` for a synthesis-cost cut. |
+| `ORCH_MAX_TURNS`      | `30`     | Reviewer-block iterations × ~3 turns each                |
+| `ORCH_LOG_MAX_BYTES`  | `10485760` | Log rotation threshold (default 10 MiB)                |
+| `ORCH_DASHBOARD_PORT` | `5174`   | Port the optional [local dashboard](docs/DASHBOARD.md) binds to (127.0.0.1 only) |
 
 ## First run
 
@@ -260,7 +275,13 @@ match the log lines and the code in `orchestrator.sh`.
   rebase if CONFLICTING/BEHIND; if CI red, post a synthetic blocker
   (`orch:ci-gate-sha` marker); if CI pending, defer. Otherwise, when
   HEAD SHA differs from `orch:review-sha`, spawn `review-pr.sh` in the
-  background (fresh `claude -p`, `SKIP_REVIEW=1`).
+  background (fresh `claude -p`, `SKIP_REVIEW=1`). `review-pr.sh` is now
+  a multi-agent coordinator: it persists the PR diff to
+  `.claude/state/review-pr<N>-sha<oid>.diff`, then has the coordinator
+  fan out to the six `pr-review-toolkit` specialists and
+  `/security-review` in parallel before synthesizing the JSON verdict.
+  Defaults: `ORCH_REVIEWER_MODEL=opus` for the coordinator; specialists
+  pick their own model.
 - **Phase 4 — `iterate-pass.sh`** *(optional)*. For each `in_review` PR
   with `orch:review-blocked` whose marker SHA matches HEAD, spawn
   `iterate-pr.sh` to address findings. Hitting the iter cap blocks the

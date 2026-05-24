@@ -14,6 +14,7 @@ Before installing, you need:
 - **`gh` CLI authenticated** (`gh auth login`) with a token scoped to the target repo. The kit opens PRs, manages labels, and reads PR review state via `gh`.
 - **`gawk`, `jq`, `python3`, `git`** — non-optional. `gawk` (not BSD awk) is specifically required because the plan parser uses `match($0, regex, array)` which BSD awk silently no-ops. `brew install gawk jq` on macOS.
 - **`gtimeout` (recommended)** — `brew install coreutils` on macOS. Without it, runaway workers can't be timeboxed.
+- **`pr-review-toolkit` plugin** — `claude plugin install pr-review-toolkit` in the target repo. The reviewer runs as a multi-agent coordinator that dispatches the toolkit's specialists (`code-reviewer`, `silent-failure-hunter`, `comment-analyzer`, `pr-test-analyzer`, `type-design-analyzer`) plus `/security-review` in parallel. Without it, the reviewer degrades to an inline single-agent review — still gates merge, weaker signal.
 - **GitHub repo with `main` branch and branch protection** allowing auto-merge. The kit's safety model depends on branch protection blocking direct pushes to main.
 - **macOS or Linux.** Windows is unsupported.
 
@@ -30,7 +31,8 @@ Before installing, you need:
 ## What's included
 
 - **Autonomous worker loop** — `orchestrator.sh` ticks a fixed phase sequence, spawning one fresh `claude -p` worker per ready task into its own git worktree.
-- **Pre-push reviewer** — a separate `claude -p` reviewer reads the PR diff and posts findings; `safety_block` findings hold the task in `in_review` until iterated.
+- **Pre-push multi-agent reviewer** — `review-pr.sh` runs as a coordinator that fans out to the `pr-review-toolkit` specialists (`code-reviewer`, `silent-failure-hunter`, `comment-analyzer`, `pr-test-analyzer`, `type-design-analyzer`) and `/security-review` in parallel, then synthesizes their findings into a single JSON verdict. `safety_block` findings hold the task in `in_review` until a human acts; everything else flows through the iterate loop.
+- **Opinionated worker prompts** — workers and iterators are wired to `superpowers:verification-before-completion` (run lint/tests before claiming done), `superpowers:test-driven-development`, `superpowers:systematic-debugging`, `superpowers:receiving-code-review`, and the `context7` MCP for library docs. Each addresses a specific orchestrator failure mode rather than being decorative.
 - **Conditional auto-merge** — sensitive tasks flagged at ingest time (`auto_merge_overrides`) skip `--auto` and wait for a human; everything else merges on green.
 - **Monitor agent** — Phase 7 heuristics (H1–H7) file `monitor:finding` issues for failure patterns that would otherwise stay silent: stuck PRs, silent block, slow plans, reviewer flake, deadlock, test-fail PRs, sensitive-decisions audits.
 - **Local dashboard** *(optional)* — read-only Flask UI at `127.0.0.1:5174` showing plan status, log tail, GH issues/PRs, active workers, and effective config. Per-task cost/token tracking included.
