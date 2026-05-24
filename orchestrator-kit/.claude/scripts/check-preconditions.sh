@@ -139,20 +139,36 @@ if ! command -v claude >/dev/null 2>&1; then
   exit 1
 fi
 
-# Capture plugin list once
-PLUGIN_LIST=$(claude plugin list 2>&1)
+# Capture plugin list as JSON. Using --json (ASCII, stable schema) avoids
+# fragile TTY-decorator parsing — the human-readable output uses U+276F "❯"
+# and Unicode status glyphs (✔/✘) that aren't guaranteed across locales,
+# CI environments, or future claude CLI versions.
+#
+# An installed-but-disabled plugin is effectively absent for the kit's
+# purposes (workers can't reach its skills), so we filter on .enabled == true.
+PLUGIN_LIST=$(claude plugin list --json 2>&1)
 PLUGIN_LIST_EXIT=$?
 if [ $PLUGIN_LIST_EXIT -ne 0 ]; then
-  echo "FAIL: 'claude plugin list' failed (exit $PLUGIN_LIST_EXIT)" >&2
+  echo "FAIL: 'claude plugin list --json' failed (exit $PLUGIN_LIST_EXIT)" >&2
   echo "$PLUGIN_LIST" | sed 's/^/  /' >&2
   exit 1
 fi
 
-# Helper: check if a plugin name appears in the list output
+# Extract enabled plugin names, stripping "@<source>" suffix from each .id.
+# If jq can't parse (e.g., CLI emitted non-JSON warnings), ENABLED_PLUGINS
+# stays empty and every required plugin will be flagged missing — the safer
+# default than silently passing.
+ENABLED_PLUGINS=$(echo "$PLUGIN_LIST" | jq -r '
+  if type == "array" then
+    .[] | select(.enabled == true) | .id | split("@")[0]
+  else empty end
+' 2>/dev/null || true)
+
+# Helper: check if a plugin name is in the enabled-plugins list.
+# grep -xF: whole-line literal match, ASCII-only, no regex metacharacter risk.
 plugin_installed() {
   local name="$1"
-  # Output lines look like: "  ❯ aws-core@<source>"
-  echo "$PLUGIN_LIST" | grep -q "❯ ${name}@"
+  grep -qxF "$name" <<< "$ENABLED_PLUGINS"
 }
 
 # Always-required for AWS-flagged plans
