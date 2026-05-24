@@ -313,6 +313,180 @@ resolve_auto_recommended() {
   esac
 }
 
+# ---- get_orchestrator_lock_path ----
+# Return the env-namespaced orchestrator tick lock path.
+# Usage:
+#   lock_path=$(get_orchestrator_lock_path <env>)
+# env defaults to "dev" if empty or unset.
+get_orchestrator_lock_path() {
+  local env="${1:-dev}"
+  echo ".claude/state/${env}/orchestrator.lock"
+}
+
+# ---- acquire_stack_lock / release_stack_lock ----
+# Per-stack deploy lock to serialize workers that touch the same
+# CloudFormation stack. Lock dir: .claude/state/<env>/cdk-stack-locks/<name>.lock.d/
+# with a PID file inside, mirroring state_write's lock pattern.
+#
+# Design choice: FAIL-FAST. If the lock is held by a live process,
+# acquire_stack_lock exits 1 immediately. The caller (T8's deploy tracker)
+# can decide whether to retry on the next orchestrator tick. This avoids
+# blocking the tick while a long CDK deploy holds the lock in another process.
+#
+# Idempotent on same-PID reacquire: a process that already holds the lock
+# can call acquire_stack_lock again and will get exit 0.
+#
+# acquire_stack_lock <stack-name> [env]
+#   env defaults to "dev" if omitted.
+#   Returns:
+#     0 — lock acquired (or already held by $$)
+#     1 — lock held by a live process (not us)
+#
+# release_stack_lock <stack-name> [env]
+#   env defaults to "dev" if omitted.
+#   Returns:
+#     0 — lock released (or already absent)
+#     1 — lock held by a different live PID (won't break it)
+
+# _STACK_LOCK_BASE is kept for backward-compat reference but is no longer
+# used directly — callers always go through _stack_lock_base_for_env().
+_STACK_LOCK_BASE=".claude/state/cdk-stack-locks"
+
+# Build the per-env base path for stack locks.
+# Separate function so it's easily testable and consistent between acquire/release.
+_stack_lock_base_for_env() {
+  local env="${1:-dev}"
+  echo ".claude/state/${env}/cdk-stack-locks"
+}
+
+acquire_stack_lock() {
+  local stack_name="$1"
+  local env="${2:-dev}"
+  if [ -z "$stack_name" ]; then
+    echo "acquire_stack_lock: stack-name required" >&2
+    return 1
+  fi
+
+  # Reject anything that could escape the lock-base dir (path traversal via
+  # `../foo`, absolute paths via `/foo`, slashes that nest under a sibling
+  # tree, NULs, spaces). CloudFormation stack names are constrained to
+  # ^[A-Za-z][A-Za-z0-9-]*$ per AWS spec — the regex below is intentionally
+  # looser (allows underscore + dot) but rejects every traversal character.
+  if [[ ! "$stack_name" =~ ^[A-Za-z0-9_.-]+$ ]] \
+     || [[ "$stack_name" = "." ]] \
+     || [[ "$stack_name" = ".." ]]; then
+    echo "acquire_stack_lock: invalid stack name '$stack_name' (allowed: A-Z a-z 0-9 _ . -; not '.' or '..')" >&2
+    return 1
+  fi
+
+  local repo_root
+  repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+    echo "acquire_stack_lock: cannot determine repo root" >&2
+    return 1
+  }
+
+  local _lock_base
+  _lock_base=$(_stack_lock_base_for_env "$env")
+  local lockdir="$repo_root/$_lock_base/${stack_name}.lock.d"
+  mkdir -p "$(dirname "$lockdir")"
+
+  # Try to create the lock atomically.
+  if mkdir "$lockdir" 2>/dev/null; then
+    echo "$$" > "$lockdir/pid"
+    return 0
+  fi
+
+  # Lock dir exists — read the existing holder.
+  # NOTE: tiny TOCTOU window here — if the holder mkdir'd but crashed before
+  # writing $lockdir/pid, the read below yields "" and we treat it as stale
+  # and break the lock. Same race accepted in state_write and
+  # _worktree_manifest_lock; resolving it would need an fsync-friendly
+  # atomic write that isn't portable across bash 3.2 + BSD coreutils.
+  local held_pid
+  held_pid=$(cat "$lockdir/pid" 2>/dev/null || echo "")
+
+  # Same-PID: idempotent success (reentrant caller).
+  if [ -n "$held_pid" ] && [ "$held_pid" = "$$" ]; then
+    return 0
+  fi
+
+  # Different PID: check liveness.
+  if [ -n "$held_pid" ] && kill -0 "$held_pid" 2>/dev/null; then
+    # Alive — fail-fast so the orchestrator tick is not blocked.
+    echo "acquire_stack_lock: stack '$stack_name' held by live PID $held_pid" >&2
+    return 1
+  fi
+
+  # Dead PID (or empty PID file) — stale lock; break it and retry once.
+  echo "acquire_stack_lock: breaking stale lock (dead PID ${held_pid:-?}) on stack '$stack_name'" >&2
+  rm -rf "$lockdir" 2>/dev/null
+  if mkdir "$lockdir" 2>/dev/null; then
+    echo "$$" > "$lockdir/pid"
+    return 0
+  fi
+
+  # Still can't acquire after stale-break — another process raced us.
+  held_pid=$(cat "$lockdir/pid" 2>/dev/null || echo "")
+  echo "acquire_stack_lock: stack '$stack_name' acquired by racing PID ${held_pid:-?}" >&2
+  return 1
+}
+
+release_stack_lock() {
+  local stack_name="$1"
+  local env="${2:-dev}"
+  if [ -z "$stack_name" ]; then
+    echo "release_stack_lock: stack-name required" >&2
+    return 1
+  fi
+
+  # Same path-traversal guard as acquire — refuse to rm -rf any path the
+  # caller couldn't legitimately have acquired.
+  if [[ ! "$stack_name" =~ ^[A-Za-z0-9_.-]+$ ]] \
+     || [[ "$stack_name" = "." ]] \
+     || [[ "$stack_name" = ".." ]]; then
+    echo "release_stack_lock: invalid stack name '$stack_name' (allowed: A-Z a-z 0-9 _ . -; not '.' or '..')" >&2
+    return 1
+  fi
+
+  local repo_root
+  repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+    echo "release_stack_lock: cannot determine repo root" >&2
+    return 1
+  }
+
+  local _lock_base
+  _lock_base=$(_stack_lock_base_for_env "$env")
+  local lockdir="$repo_root/$_lock_base/${stack_name}.lock.d"
+
+  # No lock dir — idempotent success (already released or never acquired).
+  [ -d "$lockdir" ] || return 0
+
+  local held_pid
+  held_pid=$(cat "$lockdir/pid" 2>/dev/null || echo "")
+
+  # Sentinel: locks acquired on behalf of a disowned child (T8 autonomous
+  # deploys) record "orchestrator:external" in the PID file. The actual cdk
+  # PID is captured in the deploy-status JSON, not here. Treat the sentinel
+  # as owner-relinquishable: deploy-watch may release it without warning.
+  if [ "$held_pid" = "orchestrator:external" ]; then
+    rm -rf "$lockdir" 2>/dev/null
+    return 0
+  fi
+
+  if [ -n "$held_pid" ] && [ "$held_pid" != "$$" ]; then
+    # Check if it's a live PID we shouldn't stomp.
+    if kill -0 "$held_pid" 2>/dev/null; then
+      echo "release_stack_lock: stack '$stack_name' is held by PID $held_pid (not us — $$), refusing to release" >&2
+      return 1
+    fi
+    # Dead — safe to clean up even though the PID differs.
+    echo "release_stack_lock: removing stale lock (dead PID $held_pid) on stack '$stack_name'" >&2
+  fi
+
+  rm -rf "$lockdir" 2>/dev/null
+  return 0
+}
+
 # ---- find_timeout_cmd ----
 # Print the path to a timeout(1) binary, or empty string if none is
 # available. Callers should fall back to running without a timeout (with

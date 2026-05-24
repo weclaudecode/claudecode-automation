@@ -13,7 +13,8 @@
 #   5. launch-pass     spawn up to MAX_PARALLEL workers on ready tasks
 #   6. Plan-completion check: archive if all tasks terminal
 #   7. monitor-sweep   heuristic health check (optional; ORCH_MONITOR_ENABLED)
-#   8. Release lock
+#   8. deploy-watch    poll disowned CDK deploys; settle state (optional)
+#   (lock release)     happens via cleanup_tick EXIT trap
 #
 # Each phase is best-effort: a phase exit failure logs to stderr but
 # does not abort the tick. Phases are sequential within a tick;
@@ -27,7 +28,43 @@ cd "$REPO"
 # shellcheck source=.claude/scripts/_dispatcher_lib.sh
 source "$REPO/.claude/scripts/_dispatcher_lib.sh"
 
-LOCKDIR=".claude/state/orchestrator.lock"
+# ---- Determine TICK_ENV before lock acquisition ----
+# Peek at the newest in_progress plan (without holding any lock) to read
+# its `env` field. This lets us build an env-namespaced lock path so that
+# concurrent ticks for different envs (e.g. dev vs staging) never contend
+# on the same lock directory.
+#
+# If no in_progress plan exists yet, default to "dev". The actual plan
+# selection happens again inside Phase 0 after the lock is held, so this
+# peek is only used for lock-path construction.
+#
+# Migration note: pre-T12 installs used `.claude/state/orchestrator.lock/`
+# (no env prefix). That path is now abandoned. Operators upgrading from a
+# pre-T12 kit should run: rm -rf .claude/state/orchestrator.lock
+# if a stale lock is left from an older tick.
+TICK_ENV="dev"
+_peek_candidate=$(
+  ls -t .claude/plans/*.state.json 2>/dev/null \
+    | while IFS= read -r _f; do
+        if jq -er '.status == "in_progress"' "$_f" >/dev/null 2>&1; then
+          echo "$_f"
+          break
+        fi
+      done | head -1
+)
+if [ -n "$_peek_candidate" ]; then
+  TICK_ENV=$(jq -r '.env // "dev"' "$_peek_candidate" 2>/dev/null || echo "dev")
+  # Guard: env must be one of the allowlisted values. This MUST match the
+  # ingest-plan.sh allowlist (dev|staging|prod) — a manually-edited state file
+  # with any other value would otherwise silently land at a non-canonical
+  # lock path and bypass the upstream validation.
+  if [[ ! "$TICK_ENV" =~ ^(dev|staging|prod)$ ]]; then
+    echo "orchestrator: invalid env value '$TICK_ENV' in $_peek_candidate (allowed: dev|staging|prod); aborting tick" >&2
+    exit 1
+  fi
+fi
+
+LOCKDIR=$(get_orchestrator_lock_path "$TICK_ENV")
 LOG=".claude/state/orchestrator.log"
 NOTIFY=".claude/scripts/notify.sh"
 MAX_PARALLEL="${ORCH_MAX_PARALLEL:-1}"
@@ -39,7 +76,7 @@ LOG_MAX_BYTES="${ORCH_LOG_MAX_BYTES:-10485760}"  # 10 MiB default
 AUTO_RECOMMENDED="${ORCH_AUTO_RECOMMENDED:-0}"
 export ORCH_AUTO_RECOMMENDED="$AUTO_RECOMMENDED"
 
-mkdir -p .claude/state .claude/plans/archive
+mkdir -p ".claude/state/${TICK_ENV}" .claude/state .claude/plans/archive
 
 # Combined cleanup for normal exit AND signal interruption.
 # - Removes any worktrees still registered in the active manifest. Workers
@@ -92,12 +129,42 @@ fi
 # before any phase runs — otherwise the surviving worktrees pile up.
 cleanup_active_worktrees 2>/dev/null || true
 
-STATE_FILE=$(ls -t .claude/plans/*.state.json 2>/dev/null \
-  | xargs -I {} sh -c 'jq -er ".status == \"in_progress\"" {} >/dev/null 2>&1 && echo {}' \
-  | tail -1)
+# ---- Plan promotion: pick newest in_progress plan whose requires are met ----
+# For each candidate (newest-first), call plan-promote.sh to verify that all
+# plans listed in the candidate's `requires` field have status: done in their
+# archived state files. The first candidate that passes becomes ACTIVE_STATE_FILE.
+#
+# Exit codes from plan-promote.sh:
+#   0 — plan ready to run (no unmet requires)
+#   1 — plan waiting on upstream (logged by plan-promote.sh itself)
+#   2 — hard error (malformed state / missing jq) — halt tick immediately
+STATE_FILE=""
+# shellcheck disable=SC2012  # ls -t needed for mtime sort; filenames are well-controlled
+_in_progress_candidates() {
+  ls -t .claude/plans/*.state.json 2>/dev/null \
+    | while IFS= read -r _f; do
+        if jq -er '.status == "in_progress"' "$_f" >/dev/null 2>&1; then
+          echo "$_f"
+        fi
+      done
+}
+while IFS= read -r _candidate; do
+  bash .claude/scripts/plan-promote.sh "$_candidate"
+  _promote_rc=$?
+  if [ "$_promote_rc" = "0" ]; then
+    STATE_FILE="$_candidate"
+    break
+  elif [ "$_promote_rc" = "1" ]; then
+    # plan-promote.sh already logged the reason; try the next candidate
+    continue
+  else
+    echo "tick: plan-promote.sh error (rc=$_promote_rc) on $_candidate, halting" >&2
+    exit "$_promote_rc"
+  fi
+done < <(_in_progress_candidates)
 
 if [ -z "$STATE_FILE" ]; then
-  echo "no active plan, idle"
+  echo "no active plan, idle (all waiting on requires or none in_progress)"
   exit 0
 fi
 
@@ -119,7 +186,40 @@ fi
 # tick headers (issue #2).
 EFFECTIVE_AUTO_RECOMMENDED=$(resolve_auto_recommended "$STATE_FILE")
 
-echo "plan: $PLAN_FILE  total: $TOTAL  max_parallel: $MAX_PARALLEL  auto_recommended: $EFFECTIVE_AUTO_RECOMMENDED  repo: $REPO_OWNER_REPO"
+echo "plan: $PLAN_FILE  env: $TICK_ENV  total: $TOTAL  max_parallel: $MAX_PARALLEL  auto_recommended: $EFFECTIVE_AUTO_RECOMMENDED  repo: $REPO_OWNER_REPO"
+
+# ---- Pre-flight operator gate (Task 4) ----
+# If the active plan's state contains a pre_flight block, check for the
+# corresponding GitHub issue. Gate exits 2 when the issue is open (no-op
+# this tick), 0 when cleared, and 1 on hard error.
+if bash .claude/scripts/preflight-gate.sh "$STATE_FILE"; then
+  : # gate clear — proceed
+else
+  _pf_rc=$?
+  if [ "$_pf_rc" = "2" ]; then
+    echo "tick: preflight gate active, no-op"
+    exit 0
+  else
+    echo "tick: preflight-gate.sh error (rc=$_pf_rc), aborting"
+    exit "$_pf_rc"
+  fi
+fi
+
+# ---- Cost ceiling check (pre-phase-1) ----
+# Runs after preflight-gate, before any phase that could spawn workers.
+# Only active when the plan has an aws_env block and
+# ORCH_COST_BUDGET_USD_PER_MONTH is set. Non-zero exits halt the tick.
+# Note: do NOT use `if ! cmd; then $?` — `!` resets $? to 0.
+if [ -x ".claude/scripts/cost-check.sh" ]; then
+  bash .claude/scripts/cost-check.sh "$STATE_FILE"
+  _cost_rc=$?
+  if [ "$_cost_rc" -ne 0 ]; then
+    case "$_cost_rc" in
+      1) echo "tick: cost ceiling hit, halting tick" >&2; exit 0 ;;
+      *) echo "tick: cost-check error (rc=$_cost_rc), aborting" >&2; exit "$_cost_rc" ;;
+    esac
+  fi
+fi
 
 # ---- Phase 1: refresh deps ----
 echo "--- phase 1: refresh deps ---"
@@ -210,6 +310,19 @@ if [ "${ORCH_MONITOR_ENABLED:-1}" = "1" ] && \
   STATE_FILE="$STATE_FILE" REPO="$REPO_OWNER_REPO" \
     bash .claude/scripts/monitor-sweep.sh || \
     echo "warning: monitor-sweep exited non-zero (continuing)" >&2
+fi
+
+# ---- Phase 8: deploy-watch (autonomous CDK deploys) ----
+# Polls .claude/state/deploy-status-*.json files written by workers that
+# disowned a `cdk deploy` rather than waiting for it inline. On each tick,
+# checks PID liveness: still alive -> no-op; dead -> parse log tail for
+# outcome, update the plan state file (merged/blocked), post a PR comment,
+# and release the stack lock. Optional: only runs when the script exists and
+# is executable, matching the pattern of review-pass/iterate-pass/monitor-sweep.
+if [ -x .claude/scripts/deploy-watch.sh ]; then
+  echo "--- phase 8: deploy-watch ---"
+  bash .claude/scripts/deploy-watch.sh || \
+    echo "warning: deploy-watch exited non-zero (continuing)" >&2
 fi
 
 # ---- Dashboard refresh (Task 5.1) ----

@@ -387,3 +387,86 @@ button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* ---------------------------------------------------------------------- *
+ * Bedrock spend tile
+ * ---------------------------------------------------------------------- */
+
+.bedrock-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bedrock-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.bedrock-label {
+  font-size: 11px;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.bedrock-acct {
+  font-size: 10px;
+  color: var(--fg-dim);
+  opacity: 0.7;
+}
+
+.bedrock-amount {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.bedrock-amount.na {
+  font-size: 22px;
+  color: var(--fg-dim);
+}
+
+.bedrock-na {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 4px;
+}
+
+.bedrock-reason {
+  font-size: 11px;
+  color: var(--fg-dim);
+  font-style: italic;
+  word-break: break-word;
+}
+
+.bedrock-spark {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.bedrock-sparkline {
+  display: block;
+  flex-shrink: 0;
+}
+
+.bedrock-spark-label {
+  font-size: 10px;
+  color: var(--fg-dim);
+}
+
+.bedrock-proj {
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.bedrock-proj strong {
+  color: var(--fg);
+  font-weight: 600;
+}

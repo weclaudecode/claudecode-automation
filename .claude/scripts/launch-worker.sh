@@ -139,6 +139,22 @@ if [ -z "$TASK_CONTENT" ]; then
   exit 1
 fi
 
+# Propagate AWS env vars when the plan's state has an aws_env block.
+# Uses an explicit non-empty check rather than jq // so a missing key
+# (null) is correctly treated as "absent" without side-effects.
+_AWS_ENV=$(jq -r '.aws_env // empty' "$STATE_FILE")
+if [ -n "$_AWS_ENV" ]; then
+  AWS_PROFILE=$(jq -r '.aws_env.profile // empty' "$STATE_FILE")
+  AWS_REGION_VAL=$(jq -r '.aws_env.region // empty' "$STATE_FILE")
+  AWS_ACCOUNT=$(jq -r '.aws_env.account // empty' "$STATE_FILE")
+  [ -n "$AWS_PROFILE" ]     && export AWS_PROFILE
+  [ -n "$AWS_REGION_VAL" ]  && export AWS_REGION="$AWS_REGION_VAL" AWS_DEFAULT_REGION="$AWS_REGION_VAL"
+  [ -n "$AWS_ACCOUNT" ]     && export CDK_DEFAULT_ACCOUNT="$AWS_ACCOUNT"
+  [ -n "$AWS_REGION_VAL" ]  && export CDK_DEFAULT_REGION="$AWS_REGION_VAL"
+  echo "launch-worker: aws_env found — AWS_PROFILE=${AWS_PROFILE:-<unset>} AWS_REGION=${AWS_REGION_VAL:-<unset>} CDK_DEFAULT_ACCOUNT=${AWS_ACCOUNT:-<unset>}"
+fi
+unset _AWS_ENV
+
 WORKER_MODEL="${ORCH_WORKER_MODEL:-opus}"
 
 # 5.7a: precedence per-task plan value > $ORCH_MAX_TURNS env > default 30.
