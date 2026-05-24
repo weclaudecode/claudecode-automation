@@ -313,6 +313,118 @@ resolve_auto_recommended() {
   esac
 }
 
+# ---- acquire_stack_lock / release_stack_lock ----
+# Per-stack deploy lock to serialize workers that touch the same
+# CloudFormation stack. Lock dir: .claude/state/cdk-stack-locks/<name>.lock.d/
+# with a PID file inside, mirroring state_write's lock pattern.
+#
+# Design choice: FAIL-FAST. If the lock is held by a live process,
+# acquire_stack_lock exits 1 immediately. The caller (T8's deploy tracker)
+# can decide whether to retry on the next orchestrator tick. This avoids
+# blocking the tick while a long CDK deploy holds the lock in another process.
+#
+# Idempotent on same-PID reacquire: a process that already holds the lock
+# can call acquire_stack_lock again and will get exit 0.
+#
+# acquire_stack_lock <stack-name>
+#   Returns:
+#     0 — lock acquired (or already held by $$)
+#     1 — lock held by a live process (not us)
+#
+# release_stack_lock <stack-name>
+#   Returns:
+#     0 — lock released (or already absent)
+#     1 — lock held by a different live PID (won't break it)
+
+_STACK_LOCK_BASE=".claude/state/cdk-stack-locks"
+
+acquire_stack_lock() {
+  local stack_name="$1"
+  if [ -z "$stack_name" ]; then
+    echo "acquire_stack_lock: stack-name required" >&2
+    return 1
+  fi
+
+  local repo_root
+  repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+    echo "acquire_stack_lock: cannot determine repo root" >&2
+    return 1
+  }
+
+  local lockdir="$repo_root/$_STACK_LOCK_BASE/${stack_name}.lock.d"
+  mkdir -p "$(dirname "$lockdir")"
+
+  # Try to create the lock atomically.
+  if mkdir "$lockdir" 2>/dev/null; then
+    echo "$$" > "$lockdir/pid"
+    return 0
+  fi
+
+  # Lock dir exists — read the existing holder.
+  local held_pid
+  held_pid=$(cat "$lockdir/pid" 2>/dev/null || echo "")
+
+  # Same-PID: idempotent success (reentrant caller).
+  if [ -n "$held_pid" ] && [ "$held_pid" = "$$" ]; then
+    return 0
+  fi
+
+  # Different PID: check liveness.
+  if [ -n "$held_pid" ] && kill -0 "$held_pid" 2>/dev/null; then
+    # Alive — fail-fast so the orchestrator tick is not blocked.
+    echo "acquire_stack_lock: stack '$stack_name' held by live PID $held_pid" >&2
+    return 1
+  fi
+
+  # Dead PID (or empty PID file) — stale lock; break it and retry once.
+  echo "acquire_stack_lock: breaking stale lock (dead PID ${held_pid:-?}) on stack '$stack_name'" >&2
+  rm -rf "$lockdir" 2>/dev/null
+  if mkdir "$lockdir" 2>/dev/null; then
+    echo "$$" > "$lockdir/pid"
+    return 0
+  fi
+
+  # Still can't acquire after stale-break — another process raced us.
+  held_pid=$(cat "$lockdir/pid" 2>/dev/null || echo "")
+  echo "acquire_stack_lock: stack '$stack_name' acquired by racing PID ${held_pid:-?}" >&2
+  return 1
+}
+
+release_stack_lock() {
+  local stack_name="$1"
+  if [ -z "$stack_name" ]; then
+    echo "release_stack_lock: stack-name required" >&2
+    return 1
+  fi
+
+  local repo_root
+  repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+    echo "release_stack_lock: cannot determine repo root" >&2
+    return 1
+  }
+
+  local lockdir="$repo_root/$_STACK_LOCK_BASE/${stack_name}.lock.d"
+
+  # No lock dir — idempotent success (already released or never acquired).
+  [ -d "$lockdir" ] || return 0
+
+  local held_pid
+  held_pid=$(cat "$lockdir/pid" 2>/dev/null || echo "")
+
+  if [ -n "$held_pid" ] && [ "$held_pid" != "$$" ]; then
+    # Check if it's a live PID we shouldn't stomp.
+    if kill -0 "$held_pid" 2>/dev/null; then
+      echo "release_stack_lock: stack '$stack_name' is held by PID $held_pid (not us — $$), refusing to release" >&2
+      return 1
+    fi
+    # Dead — safe to clean up even though the PID differs.
+    echo "release_stack_lock: removing stale lock (dead PID $held_pid) on stack '$stack_name'" >&2
+  fi
+
+  rm -rf "$lockdir" 2>/dev/null
+  return 0
+}
+
 # ---- find_timeout_cmd ----
 # Print the path to a timeout(1) binary, or empty string if none is
 # available. Callers should fall back to running without a timeout (with
