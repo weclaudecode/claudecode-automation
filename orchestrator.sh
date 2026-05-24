@@ -138,6 +138,9 @@ cleanup_active_worktrees 2>/dev/null || true
 #   0 — plan ready to run (no unmet requires)
 #   1 — plan waiting on upstream (logged by plan-promote.sh itself)
 #   2 — hard error (malformed state / missing jq) — halt tick immediately
+#   3 — permanently blocked by an upstream plan archived as blocked;
+#       orchestrator marks this plan blocked + files a GH issue, then
+#       continues to the next candidate (does NOT halt the tick)
 STATE_FILE=""
 # shellcheck disable=SC2012  # ls -t needed for mtime sort; filenames are well-controlled
 _in_progress_candidates() {
@@ -156,6 +159,57 @@ while IFS= read -r _candidate; do
     break
   elif [ "$_promote_rc" = "1" ]; then
     # plan-promote.sh already logged the reason; try the next candidate
+    continue
+  elif [ "$_promote_rc" = "3" ]; then
+    # Permanently blocked by upstream plan archived as blocked.
+    # Extract which upstream plans are blocked so we can record the reason.
+    _blocked_reqs=$(jq -r '.requires // [] | .[]' "$_candidate" 2>/dev/null \
+      | while IFS= read -r _req; do
+          _a=$(find .claude/plans/archive -maxdepth 1 -name "${_req}-*.state.json" 2>/dev/null | head -1)
+          if [ -n "$_a" ] && [ "$(jq -r '.status // empty' "$_a" 2>/dev/null)" = "blocked" ]; then
+            echo "$_req"
+          fi
+        done | paste -sd ',' - || true)
+    _candidate_base=$(basename "$_candidate" .state.json)
+    _blocked_reason="upstream_plan_blocked_${_blocked_reqs:-unknown}"
+
+    echo "tick: permanently blocking plan $_candidate_base (reason: $_blocked_reason)" >&2
+
+    # Mark the plan itself as blocked in its state file.
+    if state_write "$_candidate" \
+        '.status = "blocked" | .blocked_at = (now | todateiso8601) | .blocked_reason = $r' \
+        --arg r "$_blocked_reason"; then
+      # Archive it so it no longer appears as a candidate.
+      _plan_file=$(jq -r '.plan_file // empty' "$_candidate" 2>/dev/null)
+      [ -n "$_plan_file" ] && mv "$_plan_file" .claude/plans/archive/ 2>/dev/null || true
+      mv "$_candidate" .claude/plans/archive/ 2>/dev/null || \
+        echo "tick: warning — could not archive $_candidate_base after blocking" >&2
+    else
+      echo "tick: warning — state_write failed marking $_candidate_base blocked; leaving in place" >&2
+    fi
+
+    # File a GH issue to alert the operator (best-effort; don't halt tick on failure).
+    if command -v gh >/dev/null 2>&1; then
+      _issue_title="orch: plan $_candidate_base permanently blocked by upstream"
+      _existing=$(gh issue list --search "$_issue_title" --state open --limit 10 \
+        --json number,title 2>/dev/null \
+        | jq -r --arg t "$_issue_title" '.[] | select(.title == $t) | .number' \
+        | head -1 || true)
+      if [ -z "$_existing" ]; then
+        gh issue create \
+          --title "$_issue_title" \
+          --body "Plan \`${_candidate_base}\` cannot run because its upstream required plan(s) \`${_blocked_reqs:-unknown}\` archived as blocked.
+
+**Blocked reason:** \`${_blocked_reason}\`
+
+To unblock: fix or re-run the upstream plan so it archives as \`done\`, then re-ingest \`${_candidate_base}\` and reset its state to \`in_progress\`." \
+          2>/dev/null || echo "tick: warning — could not file blocked-upstream issue" >&2
+      else
+        echo "tick: blocked-upstream issue #${_existing} already open, skipping" >&2
+      fi
+    fi
+
+    # Continue to the next candidate — don't halt the tick.
     continue
   else
     echo "tick: plan-promote.sh error (rc=$_promote_rc) on $_candidate, halting" >&2

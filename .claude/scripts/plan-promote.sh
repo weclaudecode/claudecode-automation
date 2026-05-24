@@ -5,8 +5,11 @@
 #
 # Exit codes:
 #   0 — plan may be promoted to active (no unmet requires, or no requires at all)
-#   1 — plan must wait (at least one required plan is not yet done)
+#   1 — plan must wait (at least one required plan is not yet done but may
+#       eventually finish — e.g. still in_progress or not yet created)
 #   2 — hard error (malformed state file, bad arguments, jq not on PATH)
+#   3 — permanently blocked: at least one required plan is archived as blocked
+#       (no forward progress is possible without operator intervention)
 #
 # Called by orchestrator.sh during Phase 0 plan selection. For each candidate
 # in_progress state file, the orchestrator calls this script. The first
@@ -60,6 +63,12 @@ fi
 
 # ---- Step 2: check each required plan ----
 ALL_MET=true
+# Distinguish transient waits (exit 1) from permanent blocks (exit 3).
+# A permanently-blocked required plan can never unblock this plan on its own —
+# the operator must intervene. We track the two cases separately so the
+# orchestrator can file an issue and mark the downstream plan blocked (exit 3)
+# rather than spinning forever (exit 1).
+ANY_PERMANENT_BLOCK=false
 
 while IFS= read -r required_plan; do
   [ -z "$required_plan" ] && continue
@@ -73,8 +82,9 @@ while IFS= read -r required_plan; do
       # Satisfied — this required plan is done
       continue
     elif [ "$ARCHIVED_STATUS" = "blocked" ]; then
-      echo "plan-promote: $CURRENT_PLAN cannot run — required plan $required_plan is archived but blocked (no forward progress)" >&2
+      echo "plan-promote: $CURRENT_PLAN permanently blocked — required plan $required_plan is archived as blocked (operator intervention needed)" >&2
       ALL_MET=false
+      ANY_PERMANENT_BLOCK=true
       continue
     else
       echo "plan-promote: $CURRENT_PLAN waiting on $required_plan (archived with unexpected status: ${ARCHIVED_STATUS:-unknown})" >&2
@@ -99,6 +109,10 @@ done < <(echo "$REQUIRES_JSON" | jq -r '.[]' 2>/dev/null)
 # ---- Step 3: result ----
 if [ "$ALL_MET" = "true" ]; then
   exit 0
+elif [ "$ANY_PERMANENT_BLOCK" = "true" ]; then
+  # At least one required plan is permanently blocked — signal orchestrator.sh
+  # to mark this plan blocked and file a GH issue. Do not spin.
+  exit 3
 else
   exit 1
 fi

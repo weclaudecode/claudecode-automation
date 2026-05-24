@@ -4,7 +4,15 @@
 # Watches disowned CDK deploys and transitions plan state when they finish.
 #
 # Usage: deploy-watch.sh
-#   (no arguments; reads all .claude/state/deploy-status-*.json files)
+#   (no arguments; reads all .claude/state/<env>/deploy-status-*.json files)
+#
+# Migration note: pre-PLAN-05 installs wrote status files at the flat path
+#   .claude/state/deploy-status-<task>.json
+# The new env-namespaced path is:
+#   .claude/state/<env>/deploy-status-<task>.json
+# Existing flat files will NOT be picked up by the new glob. Operators should
+# either move them manually (`mv .claude/state/deploy-status-*.json
+# .claude/state/dev/`) or let them age out (they won't cause errors).
 #
 # ────────────────────────────────────────────────────────────────────────────
 # WORKER-SIDE CONVENTION (for tasks with deploy_mode == "autonomous")
@@ -34,13 +42,17 @@
 #   REPO_ROOT=$(git rev-parse --show-toplevel)
 #   echo "orchestrator:external" > "$REPO_ROOT/.claude/state/${TASK_ENV}/cdk-stack-locks/${STACK}.lock.d/pid"
 #
-#   LOG=".claude/state/deploy-status-${TASK_NUM}.log"
+#   # T12: status files are env-namespaced to avoid silent corruption when two
+#   # concurrent plans (e.g. dev and staging) share a task number. Use the
+#   # env-namespaced path below; deploy-watch globs .claude/state/*/deploy-status-*.json.
+#   LOG=".claude/state/${TASK_ENV}/deploy-status-${TASK_NUM}.log"
+#   mkdir -p ".claude/state/${TASK_ENV}"
 #   nohup cdk deploy "$STACK" --require-approval never >"$LOG" 2>&1 &
 #   DEPLOY_PID=$!
 #   disown
 #
-#   # Write the status file that deploy-watch.sh will poll on each tick
-#   cat > ".claude/state/deploy-status-${TASK_NUM}.json" <<EOF
+#   # Write the env-namespaced status file that deploy-watch.sh will poll
+#   cat > ".claude/state/${TASK_ENV}/deploy-status-${TASK_NUM}.json" <<EOF
 #   {
 #     "task": $TASK_NUM,
 #     "plan": "$PLAN_ID",
@@ -103,7 +115,11 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
 source "$REPO_ROOT/.claude/scripts/_dispatcher_lib.sh"
 
 STATE_DIR="$REPO_ROOT/.claude/state"
-STATUS_GLOB="$STATE_DIR/deploy-status-*.json"
+# T12: status files live under .claude/state/<env>/deploy-status-<task>.json
+# so that concurrent plans targeting dev vs staging never collide on the same
+# file. Glob all env subdirs with a wildcard; this also picks up any future
+# envs without code changes.
+STATUS_GLOB="$STATE_DIR/*/deploy-status-*.json"
 
 # Collect status files (glob; skip if none)
 STATUS_FILES=()

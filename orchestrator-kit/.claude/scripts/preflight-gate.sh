@@ -30,15 +30,18 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v gh >/dev/null 2>&1; then
-  echo "preflight-gate: gh CLI not on PATH" >&2
-  exit 1
-fi
-
 # -- Step 1: read pre_flight block; if absent, gate is clear --
+# This check MUST come before the gh CLI guard so that plans without a
+# pre_flight block short-circuit cleanly even when gh is not installed.
 PRE_FLIGHT=$(jq -r '.pre_flight // empty' "$STATE_FILE" 2>/dev/null)
 if [ -z "$PRE_FLIGHT" ]; then
   exit 0
+fi
+
+# Only need gh if we're going to file/check a preflight issue.
+if ! command -v gh >/dev/null 2>&1; then
+  echo "preflight-gate: gh CLI not on PATH" >&2
+  exit 1
 fi
 
 ISSUE_TITLE=$(jq -r '.pre_flight.issue_title // empty' "$STATE_FILE" 2>/dev/null)

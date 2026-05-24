@@ -92,6 +92,15 @@ No usage smoothing or day-of-week adjustment applied.
 - To force-resume regardless: delete \`.claude/state/cost-check-cache.json\` and restart the tick.
 - Close this issue once you have resolved the spend or adjusted the budget."
 
+  # Ensure the label exists before using it — gh issue create fails silently
+  # or errors on a fresh repo that never had a cost-block label.
+  gh label list --search "cost-block" --json name 2>/dev/null \
+    | jq -e '.[] | select(.name == "cost-block")' >/dev/null 2>&1 \
+    || gh label create "cost-block" \
+         --color "B60205" \
+         --description "Cost ceiling exceeded; orchestrator halted" \
+         2>/dev/null || true
+
   local create_out
   create_out=$(gh issue create \
     --title "$issue_title" \
