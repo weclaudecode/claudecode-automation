@@ -10,12 +10,15 @@ A plan is a single markdown file under `.claude/plans/`. The file name
 must match `PLAN-<NN>-<slug>.md` where `<NN>` is a zero-padded
 two-digit number unique per repo.
 
-The file begins with a `# Plan title` line followed by an optional
-**frontmatter block** — zero or more `key: value` lines in a fenced
-YAML code block labelled `plan-meta` immediately after the title, before
-the first `## Task` header. See [Plan-level frontmatter fields](#plan-level-frontmatter-fields).
-Tasks start at `## Task N:` headers and end at the next `## ` header or
-end-of-file.
+The file may optionally begin with a **YAML frontmatter block** —
+`---` on line 1, zero or more `key: value` lines, and a closing `---`
+on its own line — before the `# Plan title` line. See
+[Plan-level frontmatter fields](#plan-level-frontmatter-fields). When
+the frontmatter block is absent, the file starts directly with the
+`# Plan title` line.
+
+After the title comes optional descriptive prose. Tasks start at
+`## Task N:` headers and end at the next `## ` header or end-of-file.
 
 ## Required task header fields
 
@@ -60,15 +63,15 @@ Each entry is wrapped in backticks for markdown readability. Examples:
 
 ## Plan-level frontmatter fields
 
-Frontmatter is written as a fenced `plan-meta` YAML block immediately
-after the `# Plan title` line. All fields are optional unless otherwise
-noted. Unknown keys are silently ignored by `ingest-plan.sh` to permit
-forward compatibility.
+Frontmatter is written as a standard YAML block at the very top of the
+file: `---` on line 1, key/value lines, and a closing `---` on its own
+line, before the `# Plan title` heading. This is the same syntax
+`ingest-plan.sh` already uses to read `auto_recommended`. All fields are
+optional unless otherwise noted. Unknown keys are silently ignored by
+`ingest-plan.sh` to permit forward compatibility.
 
-````markdown
-# PLAN-05-aws-deploy-support — deploy pipeline
-
-```plan-meta
+```markdown
+---
 env: staging
 aws:
   account: "123456789012"
@@ -83,8 +86,10 @@ pre_flight:
     - cdk bootstrap done for account 123456789012
     - AWS_PROFILE set in cron env
 auto_recommended: false
+---
+
+# PLAN-05-aws-deploy-support — deploy pipeline
 ```
-````
 
 ### `env:` — `dev` | `staging` | `prod`
 
@@ -272,12 +277,16 @@ and hands off to the operator. Default: `operator`.
 | `operator` | Worker prepares the branch and posts a `cdk diff` artifact as a PR comment (T6). The operator reviews the diff and merges manually. No `cdk deploy` is executed by the worker. |
 | `autonomous` | Worker runs `cdk deploy <stack>` after the PR is green. `deploy-watch.sh` (T8) tracks the disowned deployment and updates task status when it finishes or fails. |
 
-The `autonomous` mode requires:
-- The plan's `aws:` frontmatter block to be present (ingest rejects the
-  plan if a task has `deploy_mode: autonomous` but `aws:` is absent).
-- `auto_merge:` for the same task must not be `false` (a human-gated
-  task that also runs its own deploy is a contradictory setup; ingest
-  emits a warning and coerces to `operator`).
+The `autonomous` mode requires the plan's `aws:` frontmatter block to
+be present (ingest rejects the plan if a task has `deploy_mode:
+autonomous` but `aws:` is absent).
+
+`deploy_mode: autonomous` combined with `auto_merge: false` is
+permitted: the operator merges the PR by hand once satisfied with the
+`cdk diff` artifact, and `deploy-watch.sh` (T8) then begins tracking
+the autonomous deploy that the worker launched. This is the intended
+pattern for sensitive infrastructure changes that still benefit from
+automated deploy monitoring.
 
 ```markdown
 ## Task 9: Deploy authentication stack
@@ -329,10 +338,8 @@ Validation:
 The example below shows a plan that uses all new fields. Fields whose
 defaults are acceptable are omitted.
 
-````markdown
-# PLAN-05-aws-deploy-support — CDK deploy pipeline
-
-```plan-meta
+```markdown
+---
 env: staging
 aws:
   account: "123456789012"
@@ -346,7 +353,9 @@ pre_flight:
     - cdk bootstrap done for account 123456789012 in ap-southeast-2
     - AWS_PROFILE=deploy-role is set in the cron environment
     - Bedrock us.anthropic.claude-sonnet-4-5 access enabled
-```
+---
+
+# PLAN-05-aws-deploy-support — CDK deploy pipeline
 
 ## Task 1: Add receipt template module
 **depends_on:** []
@@ -374,12 +383,12 @@ Deploy the receipt-sender Lambda via CDK. Operator must approve the
 cdk diff PR comment before the auto-merge gate passes.
 Commit: `feat(infra): deploy receipt-sender stack`.
 ```
-````
 
 > Note: Task 3 uses `auto_merge: false` with `deploy_mode: autonomous`.
-> This is permitted: the operator merges the PR manually, then
-> `deploy-watch.sh` starts tracking the CDK deploy that the worker
-> launched after the PR went green.
+> This is the documented combination for sensitive infrastructure
+> changes — the operator merges the PR manually, then `deploy-watch.sh`
+> (T8) begins tracking the CDK deploy that the worker launched after
+> the PR went green.
 
 ## Ingest rejections
 
