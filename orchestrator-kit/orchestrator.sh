@@ -143,12 +143,14 @@ fi
 # Runs after preflight-gate, before any phase that could spawn workers.
 # Only active when the plan has an aws_env block and
 # ORCH_COST_BUDGET_USD_PER_MONTH is set. Non-zero exits halt the tick.
+# Note: do NOT use `if ! cmd; then $?` — `!` resets $? to 0.
 if [ -x ".claude/scripts/cost-check.sh" ]; then
-  if ! bash .claude/scripts/cost-check.sh "$STATE_FILE"; then
-    _cost_rc=$?
+  bash .claude/scripts/cost-check.sh "$STATE_FILE"
+  _cost_rc=$?
+  if [ "$_cost_rc" -ne 0 ]; then
     case "$_cost_rc" in
-      1) echo "tick: cost ceiling hit, halting tick" ; exit 0 ;;
-      *) echo "tick: cost-check error rc=$_cost_rc, halting tick" ; exit "$_cost_rc" ;;
+      1) echo "tick: cost ceiling hit, halting tick" >&2; exit 0 ;;
+      *) echo "tick: cost-check error (rc=$_cost_rc), aborting" >&2; exit "$_cost_rc" ;;
     esac
   fi
 fi

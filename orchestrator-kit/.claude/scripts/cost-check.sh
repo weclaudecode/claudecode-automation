@@ -141,20 +141,35 @@ if [ -f "$CACHE_FILE" ]; then
 
     AGE=$(( NOW_EPOCH - CACHE_EPOCH ))
     if [ "$AGE" -lt "$CACHE_TTL" ]; then
-      MONTH_TO_DATE_USD=$(jq -r '.month_to_date_usd' "$CACHE_FILE")
-      PROJECTED_USD=$(jq -r '.projected_month_end_usd' "$CACHE_FILE")
-      local_budget=$(jq -r '.budget_usd' "$CACHE_FILE")
-      echo "cost-check: cache hit (age ${AGE}s), month-to-date \$${MONTH_TO_DATE_USD}, projected \$${PROJECTED_USD}, budget \$${local_budget}"
+      CACHED_MTD=$(jq -r '.month_to_date_usd // empty' "$CACHE_FILE" 2>/dev/null)
+      CACHED_PROJ=$(jq -r '.projected_month_end_usd // empty' "$CACHE_FILE" 2>/dev/null)
+      CACHED_BUDGET=$(jq -r '.budget_usd // empty' "$CACHE_FILE" 2>/dev/null)
 
-      if python3 -c \
-        "import sys; sys.exit(0 if float('${PROJECTED_USD}') < float('${local_budget}') else 1)" \
+      # Treat partial/malformed cache as a miss → fall through to fresh fetch.
+      # Also invalidate cache when the budget env var has changed since the
+      # cache was written: the projection is still valid, but the decision
+      # threshold has shifted and reporting the old budget would be misleading.
+      if [ -z "$CACHED_MTD" ] || [ -z "$CACHED_PROJ" ] || [ -z "$CACHED_BUDGET" ]; then
+        echo "cost-check: cache file present but incomplete, refreshing"
+      elif ! python3 -c \
+        "import sys; sys.exit(0 if float('${CACHED_BUDGET}') == float('${BUDGET_USD}') else 1)" \
         2>/dev/null; then
-        echo "cost-check: OK (cached)"
-        exit 0
+        echo "cost-check: cached budget \$${CACHED_BUDGET} != current \$${BUDGET_USD}, refreshing"
       else
-        echo "cost-check: BUDGET EXCEEDED (cached) — month-to-date \$${MONTH_TO_DATE_USD}, projected \$${PROJECTED_USD}, budget \$${local_budget}" >&2
-        file_cost_block_issue
-        exit 1
+        MONTH_TO_DATE_USD="$CACHED_MTD"
+        PROJECTED_USD="$CACHED_PROJ"
+        echo "cost-check: cache hit (age ${AGE}s), month-to-date \$${MONTH_TO_DATE_USD}, projected \$${PROJECTED_USD}, budget \$${BUDGET_USD}"
+
+        if python3 -c \
+          "import sys; sys.exit(0 if float('${PROJECTED_USD}') < float('${BUDGET_USD}') else 1)" \
+          2>/dev/null; then
+          echo "cost-check: OK (cached)"
+          exit 0
+        else
+          echo "cost-check: BUDGET EXCEEDED (cached) — month-to-date \$${MONTH_TO_DATE_USD}, projected \$${PROJECTED_USD}, budget \$${BUDGET_USD}" >&2
+          file_cost_block_issue
+          exit 1
+        fi
       fi
     fi
   fi
@@ -184,7 +199,11 @@ fi
 
 CE_FILTER="{\"Dimensions\":{\"Key\":\"LINKED_ACCOUNT\",\"Values\":[\"${AWS_ACCOUNT}\"]}}"
 
-CE_OUTPUT=$(AWS_DEFAULT_REGION="$AWS_REGION" aws ce get-cost-and-usage \
+# Cost Explorer is a global service routed to us-east-1; the plan's
+# aws_env.region does not affect the endpoint, so it is intentionally
+# not passed here. We still read it from state to validate that the
+# plan has a coherent aws_env block.
+CE_OUTPUT=$(aws ce get-cost-and-usage \
   --time-period "Start=${FIRST_OF_MONTH},End=${TOMORROW}" \
   --granularity MONTHLY \
   --metrics UnblendedCost \
