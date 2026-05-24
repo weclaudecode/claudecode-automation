@@ -165,6 +165,46 @@ fi
 release_stack_lock "$STACK"
 
 # ---------------------------------------------------------------------------
+# Scenario 5: path-traversal / invalid-name rejection
+# ---------------------------------------------------------------------------
+echo "--- Scenario 5: invalid stack names rejected ---"
+
+# Representative bad names. Each must cause acquire AND release to return
+# exit 1 BEFORE any filesystem effect. Empty string is handled by the
+# "stack-name required" guard rather than the regex, but the outcome
+# (return 1, no disk touch) is identical.
+BAD_NAMES=(
+  "../evil"
+  "foo/bar"
+  "/abs/path"
+  ".."
+  "with space"
+  "pipe|name"
+  "semi;colon"
+)
+
+for bad in "${BAD_NAMES[@]}"; do
+  if acquire_stack_lock "$bad" 2>/dev/null; then
+    fail "acquire_stack_lock accepted invalid name: '$bad'"
+    release_stack_lock "$bad" 2>/dev/null || true
+  else
+    pass "acquire_stack_lock rejected invalid name: '$bad'"
+  fi
+  if release_stack_lock "$bad" 2>/dev/null; then
+    fail "release_stack_lock accepted invalid name: '$bad'"
+  else
+    pass "release_stack_lock rejected invalid name: '$bad'"
+  fi
+done
+
+# Verify no traversal artifact was created above the lock base.
+if [ -e "$(dirname "$LOCK_BASE")/evil.lock.d" ] || [ -e "$LOCK_BASE/../evil.lock.d" ]; then
+  fail "path-traversal artifact present on disk after rejection"
+else
+  pass "no path-traversal artifact left on disk"
+fi
+
+# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 echo ""

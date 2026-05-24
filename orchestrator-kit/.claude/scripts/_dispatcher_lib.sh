@@ -345,6 +345,18 @@ acquire_stack_lock() {
     return 1
   fi
 
+  # Reject anything that could escape the lock-base dir (path traversal via
+  # `../foo`, absolute paths via `/foo`, slashes that nest under a sibling
+  # tree, NULs, spaces). CloudFormation stack names are constrained to
+  # ^[A-Za-z][A-Za-z0-9-]*$ per AWS spec — the regex below is intentionally
+  # looser (allows underscore + dot) but rejects every traversal character.
+  if [[ ! "$stack_name" =~ ^[A-Za-z0-9_.-]+$ ]] \
+     || [[ "$stack_name" = "." ]] \
+     || [[ "$stack_name" = ".." ]]; then
+    echo "acquire_stack_lock: invalid stack name '$stack_name' (allowed: A-Z a-z 0-9 _ . -; not '.' or '..')" >&2
+    return 1
+  fi
+
   local repo_root
   repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
     echo "acquire_stack_lock: cannot determine repo root" >&2
@@ -361,6 +373,11 @@ acquire_stack_lock() {
   fi
 
   # Lock dir exists — read the existing holder.
+  # NOTE: tiny TOCTOU window here — if the holder mkdir'd but crashed before
+  # writing $lockdir/pid, the read below yields "" and we treat it as stale
+  # and break the lock. Same race accepted in state_write and
+  # _worktree_manifest_lock; resolving it would need an fsync-friendly
+  # atomic write that isn't portable across bash 3.2 + BSD coreutils.
   local held_pid
   held_pid=$(cat "$lockdir/pid" 2>/dev/null || echo "")
 
@@ -394,6 +411,15 @@ release_stack_lock() {
   local stack_name="$1"
   if [ -z "$stack_name" ]; then
     echo "release_stack_lock: stack-name required" >&2
+    return 1
+  fi
+
+  # Same path-traversal guard as acquire — refuse to rm -rf any path the
+  # caller couldn't legitimately have acquired.
+  if [[ ! "$stack_name" =~ ^[A-Za-z0-9_.-]+$ ]] \
+     || [[ "$stack_name" = "." ]] \
+     || [[ "$stack_name" = ".." ]]; then
+    echo "release_stack_lock: invalid stack name '$stack_name' (allowed: A-Z a-z 0-9 _ . -; not '.' or '..')" >&2
     return 1
   fi
 
