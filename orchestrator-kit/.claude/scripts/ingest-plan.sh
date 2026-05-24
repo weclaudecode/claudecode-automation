@@ -84,7 +84,12 @@ if [ "$HAS_FRONTMATTER" = "yes" ]; then
 
   # Parse with python3 yaml.safe_load → JSON; validate allowed keys
   FRONTMATTER_JSON=$(echo "$FRONTMATTER_RAW" | python3 -c '
-import yaml, json, sys, re
+import json, sys, re
+try:
+    import yaml
+except ImportError:
+    sys.stderr.write("ingest-plan: PyYAML required (pip install pyyaml)\n")
+    sys.exit(1)
 
 ALLOWED_KEYS = {"auto_recommended", "env", "aws", "requires", "pre_flight"}
 
@@ -296,10 +301,13 @@ TASKS_JSON=$("$GAWK" '
   current_task != "" && /^\*\*smoke_test:\*\*/ {
     line = $0
     sub(/^\*\*smoke_test:\*\*[[:space:]]*/, "", line)
-    if (line ~ /\n/) {
-      printf "ingest-plan: task %s: smoke_test must be a single line\n", current_task > "/dev/stderr"
+    # gawk reads one record per newline, so $0 never contains \n —
+    # multi-line smoke_test would land on a separate line and be ignored.
+    # PLAN-FORMAT.md requires single-line; reject empty as malformed.
+    if (line == "") {
+      printf "ingest-plan: task %s: smoke_test must be a non-empty single-line command\n", current_task > "/dev/stderr"
       parse_errors = 1
-    } else if (line != "") {
+    } else {
       smoke_test_set = 1
       smoke_test_value = line
     }
@@ -498,11 +506,32 @@ TASKS_OBJECT=$(printf '%s\n' "$TASKS_JSON" | jq -s '
   ))
 ')
 
-# Build optional top-level fields
-ENV_FIELD=$([ -n "$ENV_VAL" ] && echo "\"$ENV_VAL\"" || echo "null")
-AWS_ENV_FIELD=$([ "$HAS_AWS" = "true" ] && echo "$FRONTMATTER_JSON" | jq '.aws' || echo "null")
-REQUIRES_FIELD=$([ "$HAS_REQUIRES" = "true" ] && echo "$FRONTMATTER_JSON" | jq '.requires' || echo "null")
-PRE_FLIGHT_FIELD=$([ "$HAS_PRE_FLIGHT" = "true" ] && echo "$FRONTMATTER_JSON" | jq '.pre_flight' || echo "null")
+# Build optional top-level fields. Use explicit if/else (not `&& ... || ...`)
+# so a jq failure surfaces as a non-zero exit rather than a silent "null"
+# fallback — silent-failure is the kit's documented worst failure mode.
+if [ -n "$ENV_VAL" ]; then
+  ENV_FIELD="\"$ENV_VAL\""
+else
+  ENV_FIELD="null"
+fi
+
+if [ "$HAS_AWS" = "true" ]; then
+  AWS_ENV_FIELD=$(echo "$FRONTMATTER_JSON" | jq '.aws')
+else
+  AWS_ENV_FIELD="null"
+fi
+
+if [ "$HAS_REQUIRES" = "true" ]; then
+  REQUIRES_FIELD=$(echo "$FRONTMATTER_JSON" | jq '.requires')
+else
+  REQUIRES_FIELD="null"
+fi
+
+if [ "$HAS_PRE_FLIGHT" = "true" ]; then
+  PRE_FLIGHT_FIELD=$(echo "$FRONTMATTER_JSON" | jq '.pre_flight')
+else
+  PRE_FLIGHT_FIELD="null"
+fi
 
 jq -n \
   --argjson schema_version 3 \
