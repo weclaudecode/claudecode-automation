@@ -8,7 +8,7 @@
 # into a repo" section of orchestrator-kit/README.md). Operators who later
 # `cp` only the one file they think changed end up in partial-upgrade state —
 # e.g. a new orchestrator.sh calling a helper that didn't get propagated into
-# _dispatcher_lib.sh. See issue #8.
+# _dispatcher_lib.sh.
 #
 # This script compares a "kit-owned" file manifest between a source kit
 # directory and the current git-root (the installed target). It reports
@@ -152,10 +152,9 @@ trap cleanup EXIT INT TERM
 # Build manifest: walk kit-source for kit-owned files. Emit POSIX-relative
 # paths (one per line) into $MANIFEST_FILE.
 #
-# Why dynamic walking rather than a static list: the kit gains files over time
-# (PLAN-02 added _heuristics/, PLAN-03 added dashboard/). A static list would
-# silently miss new files. Walking the source guarantees the manifest tracks
-# the kit's current shape.
+# Why dynamic walking rather than a static list: the kit gains files over
+# time. A static list would silently miss new ones; walking the source
+# guarantees the manifest tracks the kit's current shape.
 # ---------------------------------------------------------------------------
 
 MANIFEST_FILE="$TMPDIR_BASE/manifest.txt"
@@ -175,18 +174,20 @@ KIT_DIRS=(
   ".claude/docs"
 )
 
+# Exclude Python bytecode (__pycache__ trees, *.pyc) — runtime artefacts,
+# not kit-owned. The same exclusion applies to the target-side EXTRA walk
+# below; both sides must agree on what counts as kit-owned.
+KIT_FIND_EXCLUDE=(
+  -type d -name __pycache__ -prune -o
+  -type f -not -name '*.pyc' -print0
+)
+
 for d in "${KIT_DIRS[@]}"; do
   if [ -d "$SOURCE/$d" ]; then
-    # -type f catches regular files; -print0 / sort handle awkward names.
-    # Exclude Python bytecode artefacts (__pycache__ trees, *.pyc) — these
-    # are runtime-generated, not kit-owned. Including them caused the
-    # manifest to list .pyc files as MISSING/DRIFT on every run.
     while IFS= read -r -d '' f; do
       rel="${f#"$SOURCE/"}"
       echo "$rel" >> "$MANIFEST_FILE"
-    done < <(find "$SOURCE/$d" \
-              -type d -name __pycache__ -prune -o \
-              -type f -not -name '*.pyc' -print0)
+    done < <(find "$SOURCE/$d" "${KIT_FIND_EXCLUDE[@]}")
   fi
 done
 
@@ -200,6 +201,11 @@ MANIFEST_COUNT="$(wc -l < "$MANIFEST_FILE" | tr -d ' ')"
 #   IDENTICAL — same hash on both sides
 #   DRIFT     — present on both sides, different hash
 #   MISSING   — present in source, absent in target
+#   ERROR     — hash failed for src or target (perms, vanished, segfault)
+#
+# Without an explicit ERROR row, an empty src_hash and empty tgt_hash
+# would compare equal and silently report IDENTICAL — turning a real
+# failure into a false-clean exit 0.
 #
 # Emits TSV: <classification>\t<relpath>
 # ---------------------------------------------------------------------------
@@ -208,7 +214,6 @@ CLASSIFY_FILE="$TMPDIR_BASE/classify.tsv"
 : > "$CLASSIFY_FILE"
 
 hash_of() {
-  # shasum -a 256 prints "<hash>  <file>"; cut to just the hash.
   shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'
 }
 
@@ -224,6 +229,11 @@ while IFS= read -r rel; do
 
   src_hash="$(hash_of "$src_path")"
   tgt_hash="$(hash_of "$tgt_path")"
+
+  if [ -z "$src_hash" ] || [ -z "$tgt_hash" ]; then
+    printf 'ERROR\t%s\n' "$rel" >> "$CLASSIFY_FILE"
+    continue
+  fi
 
   if [ "$src_hash" = "$tgt_hash" ]; then
     printf 'IDENTICAL\t%s\n' "$rel" >> "$CLASSIFY_FILE"
@@ -264,7 +274,7 @@ for d in "${KIT_DIRS[@]}"; do
       if ! manifest_contains "$rel"; then
         echo "$rel" >> "$EXTRA_FILE"
       fi
-    done < <(find "$TARGET/$d" -type f -print0)
+    done < <(find "$TARGET/$d" "${KIT_FIND_EXCLUDE[@]}")
   fi
 done
 
@@ -281,6 +291,7 @@ count_class() {
 N_IDENTICAL="$(count_class IDENTICAL)"
 N_DRIFT="$(count_class DRIFT)"
 N_MISSING="$(count_class MISSING)"
+N_ERROR="$(count_class ERROR)"
 N_EXTRA="$(wc -l < "$EXTRA_FILE" | tr -d ' ')"
 
 # ---------------------------------------------------------------------------
@@ -294,11 +305,21 @@ print_summary() {
   printf '   IDENTICAL: %d\n' "$N_IDENTICAL"
   printf '   DRIFT:     %d\n' "$N_DRIFT"
   printf '   MISSING:   %d\n' "$N_MISSING"
+  printf '   ERROR:     %d\n' "$N_ERROR"
   printf '   EXTRA (kept in target): %d\n' "$N_EXTRA"
   echo
 }
 
 print_summary
+
+# ERROR rows mean hashing failed for at least one entry; we cannot safely
+# claim "no drift" because the comparison was inconclusive. Always abort
+# loudly (even when DRIFT+MISSING is 0) and never proceed to --apply.
+if [ "$N_ERROR" -gt 0 ]; then
+  echo "kit-upgrade: hash failures (likely perms / file vanished mid-walk):" >&2
+  awk -F '\t' '$1=="ERROR"{print "  "$2}' "$CLASSIFY_FILE" >&2
+  exit 1
+fi
 
 NEED_UPGRADE=$((N_DRIFT + N_MISSING))
 
@@ -358,10 +379,24 @@ while IFS= read -r rel; do
     printf 'MISSING\t%s\n' "$rel" >> "$RECHECK"
     continue
   fi
-  if [ "$(hash_of "$src_path")" != "$(hash_of "$tgt_path")" ]; then
+  recheck_src="$(hash_of "$src_path")"
+  recheck_tgt="$(hash_of "$tgt_path")"
+  # Same empty-hash guard as the primary classify loop — an empty == empty
+  # comparison would silently dismiss a real DRIFT here too.
+  if [ -z "$recheck_src" ] || [ -z "$recheck_tgt" ]; then
+    printf 'ERROR\t%s\n' "$rel" >> "$RECHECK"
+    continue
+  fi
+  if [ "$recheck_src" != "$recheck_tgt" ]; then
     printf 'DRIFT\t%s\n' "$rel" >> "$RECHECK"
   fi
 done < "$MANIFEST_FILE"
+
+if awk -F '\t' '$1=="ERROR"' "$RECHECK" | grep -q .; then
+  echo "kit-upgrade: hash failures during re-check; refusing to --apply:" >&2
+  awk -F '\t' '$1=="ERROR"{print "  "$2}' "$RECHECK" >&2
+  exit 1
+fi
 
 NEEDS_RECHECK="$TMPDIR_BASE/needs-recheck.txt"
 awk -F '\t' '$1=="DRIFT" || $1=="MISSING" {print $0}' "$RECHECK" > "$NEEDS_RECHECK"
@@ -422,7 +457,12 @@ while IFS= read -r rel; do
   [ -z "$rel" ] && continue
   src_path="$SOURCE/$rel"
   tgt_path="$TARGET/$rel"
-  mkdir -p "$(dirname "$tgt_path")"
+  parent_dir="$(dirname "$tgt_path")"
+  if ! mkdir -p "$parent_dir"; then
+    echo "kit-upgrade: mkdir failed for $parent_dir (parent of $rel)" >&2
+    revert_apply
+    exit 1
+  fi
   if ! cp -p "$src_path" "$tgt_path"; then
     echo "kit-upgrade: copy failed for $rel" >&2
     revert_apply

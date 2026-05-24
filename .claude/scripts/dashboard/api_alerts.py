@@ -36,6 +36,7 @@ from __future__ import annotations
 import datetime as _dt
 import glob
 import json
+import logging
 import os
 import re
 import subprocess
@@ -48,6 +49,13 @@ from flask import Blueprint, jsonify
 from dashboard.app import json_envelope
 
 bp = Blueprint("alerts", __name__)
+log = logging.getLogger("dashboard.alerts")
+
+# Exception types that almost always indicate a programmer error rather than
+# a transient runtime condition. When the alerts route's blanket except sees
+# one of these we tag the envelope warning with INTERNAL: so operators know
+# this is a bug to file, not a retry-and-it-clears situation.
+_INTERNAL_ERROR_TYPES = (AttributeError, KeyError, TypeError, NameError)
 
 # ---------------------------------------------------------------------------
 # Tunables
@@ -64,7 +72,7 @@ _DEFAULT_EXPECTED_TICK_MINUTES = 5
 # H6 test-fail, H7 sensitive-decisions audit), so they're warn-grade.
 _URGENT_MONITOR_HEURISTICS = ("H1", "H2", "H4")
 
-# `=== tick 2026-05-24T03:15:00Z ===` — pulled out of orchestrator.log
+# Matches `=== tick <ISO8601> ===` lines emitted by orchestrator.sh.
 _TICK_RE = re.compile(r"^=== tick (\S+)")
 
 # Plan state location relative to repo root.
@@ -155,7 +163,7 @@ def _read_blocked_alerts() -> tuple[list[dict], str | None]:
                 f"reset task: jq '.tasks[\"{task_n}\"].status=\"pending\" | "
                 f".tasks[\"{task_n}\"].retries=0 | "
                 f"del(.tasks[\"{task_n}\"].blocked_at,.tasks[\"{task_n}\"].blocked_reason)' "
-                f"{state_file} > /tmp/s && mv /tmp/s {state_file}"
+                f"'{state_file}' > /tmp/s && mv /tmp/s '{state_file}'"
             ),
         })
     return out, None
@@ -176,6 +184,21 @@ def _cached_blocked_alerts() -> tuple[list[dict], str | None]:
 # Collector: dead-orchestrator (from log tail)
 # ---------------------------------------------------------------------------
 
+def _has_active_plan() -> bool:
+    """True if any state file is currently `in_progress`. Used by the dead-
+    orchestrator collector to decide whether a missing/empty log is benign
+    (no work to do anyway) or alarming (work is queued but cron isn't
+    running)."""
+    for c in glob.glob(_PLANS_GLOB):
+        try:
+            with open(c) as f:
+                if json.load(f).get("status") == "in_progress":
+                    return True
+        except (OSError, json.JSONDecodeError):
+            continue
+    return False
+
+
 def _last_tick_iso() -> tuple[str | None, str | None]:
     """Return (iso, error). iso is None if no tick marker found."""
     path = Path(_LOG_PATH)
@@ -189,9 +212,16 @@ def _last_tick_iso() -> tuple[str | None, str | None]:
             size = fh.tell()
             chunk = min(size, 65536)
             fh.seek(size - chunk)
-            tail = fh.read().decode("utf-8", errors="replace").splitlines()
+            raw = fh.read()
     except OSError as e:
         return None, f"log unreadable: {e}"
+
+    tail = raw.decode("utf-8", errors="replace").splitlines()
+    # Discard the first line when we're reading a partial chunk: the seek
+    # likely landed mid-codepoint or mid-line, leaving a garbage prefix that
+    # could spuriously match (or fail to match) _TICK_RE.
+    if size > chunk and tail:
+        tail = tail[1:]
 
     last = None
     for line in tail:
@@ -206,14 +236,25 @@ def _dead_orchestrator_alert() -> tuple[list[dict], str | None]:
     if err:
         return [], err
     if iso is None:
-        # No tick markers in log — either fresh install or log rotated and the
-        # current file's prelude doesn't have one yet. Stay quiet rather than
-        # cry wolf.
+        path = Path(_LOG_PATH)
+        # Missing log + an in_progress plan = the orchestrator should be
+        # running but isn't leaving a trail. Surface as a soft warning so
+        # operators can investigate (perms, rotated wrong, wrong cwd in
+        # cron). If no plan is in flight, stay quiet — there's no work to
+        # supervise yet.
+        if not path.exists() and _has_active_plan():
+            return [], (
+                f"orchestrator log missing ({_LOG_PATH}) but a plan is "
+                f"in_progress — has cron run yet?"
+            )
         return [], None
     try:
         ts = _dt.datetime.fromisoformat(iso.replace("Z", "+00:00"))
     except ValueError:
-        return [], None
+        # A malformed tick timestamp masks the cron-dead signal entirely
+        # if we stay silent. Surface it so the envelope warning banner
+        # shows up; the operator can re-grep the log for the offender.
+        return [], f"unparseable tick timestamp in {_LOG_PATH}: {iso!r}"
     now = _dt.datetime.now(_dt.timezone.utc)
     elapsed = (now - ts).total_seconds() / 60.0
     threshold = _expected_tick_minutes() * 2
@@ -344,7 +385,6 @@ def _fetch_monitor_findings() -> tuple[list[dict], str | None]:
     for it in items:
         number = it.get("number")
         title = it.get("title") or ""
-        # Severity: warn if title mentions an urgent heuristic, else info.
         severity = "info"
         for h in _URGENT_MONITOR_HEURISTICS:
             if h in title:
@@ -406,7 +446,13 @@ def alerts():
         try:
             items, err = fn()
         except Exception as e:  # noqa: BLE001 — strip must never raise
-            errors.append(f"alerts.{name}: {type(e).__name__}: {e}")
+            # Log the full traceback so it's still recoverable in dashboard.log
+            # / stderr. Programmer-error exception types get an INTERNAL:
+            # prefix so operators distinguish "bug, file an issue" from the
+            # transient gh-timed-out class of warning.
+            log.exception("alerts collector %r failed", name)
+            tag = "INTERNAL:" if isinstance(e, _INTERNAL_ERROR_TYPES) else ""
+            errors.append(f"alerts.{name}: {tag}{type(e).__name__}: {e}")
             continue
         if err:
             errors.append(f"alerts.{name}: {err}")
