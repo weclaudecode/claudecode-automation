@@ -237,9 +237,9 @@ fi
 # outcome, update the plan state file (merged/blocked), post a PR comment,
 # and release the stack lock. Optional: only runs when the script exists and
 # is executable, matching the pattern of review-pass/iterate-pass/monitor-sweep.
-if [ -x "$REPO_ROOT/.claude/scripts/deploy-watch.sh" ]; then
+if [ -x .claude/scripts/deploy-watch.sh ]; then
   echo "--- phase 8: deploy-watch ---"
-  bash "$REPO_ROOT/.claude/scripts/deploy-watch.sh" || \
+  bash .claude/scripts/deploy-watch.sh || \
     echo "warning: deploy-watch exited non-zero (continuing)" >&2
 fi
 

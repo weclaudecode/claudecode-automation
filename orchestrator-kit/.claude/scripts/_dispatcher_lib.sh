@@ -437,6 +437,15 @@ release_stack_lock() {
   local held_pid
   held_pid=$(cat "$lockdir/pid" 2>/dev/null || echo "")
 
+  # Sentinel: locks acquired on behalf of a disowned child (T8 autonomous
+  # deploys) record "orchestrator:external" in the PID file. The actual cdk
+  # PID is captured in the deploy-status JSON, not here. Treat the sentinel
+  # as owner-relinquishable: deploy-watch may release it without warning.
+  if [ "$held_pid" = "orchestrator:external" ]; then
+    rm -rf "$lockdir" 2>/dev/null
+    return 0
+  fi
+
   if [ -n "$held_pid" ] && [ "$held_pid" != "$$" ]; then
     # Check if it's a live PID we shouldn't stomp.
     if kill -0 "$held_pid" 2>/dev/null; then

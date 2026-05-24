@@ -20,6 +20,14 @@
 #     exit 1
 #   }
 #
+#   # The acquire records $$ (the worker's PID) in the lock file. Since the
+#   # worker is about to exit, overwrite it with the "orchestrator:external"
+#   # sentinel — release_stack_lock recognises this and relinquishes the lock
+#   # without the usual "held by a different PID" warning. The disowned cdk
+#   # process's PID lives in the deploy-status JSON instead.
+#   REPO_ROOT=$(git rev-parse --show-toplevel)
+#   echo "orchestrator:external" > "$REPO_ROOT/.claude/state/cdk-stack-locks/${STACK}.lock.d/pid"
+#
 #   LOG=".claude/state/deploy-status-${TASK_NUM}.log"
 #   nohup cdk deploy "$STACK" --require-approval never >"$LOG" 2>&1 &
 #   DEPLOY_PID=$!
@@ -43,8 +51,9 @@
 #   # Worker exits — orchestrator deploy-watch picks up from here on the
 #   # next tick(s) until the deploy finishes.
 #
-# The stack lock is held by the disowned cdk process's PID. deploy-watch
-# releases it once the deploy reaches a terminal state (succeeded/failed).
+# deploy-watch releases the stack lock once the deploy reaches a terminal
+# state (succeeded/failed/rolled_back). The sentinel pattern above avoids a
+# spurious "held by different PID" warning at release time.
 # ────────────────────────────────────────────────────────────────────────────
 #
 # Status file format (after deploy-watch updates it):
@@ -109,8 +118,13 @@ now_iso8601() {
 }
 
 # Detect outcome from the tail of a log file.
-# Prints "succeeded", "failed", or "ambiguous".
+# Prints "succeeded", "failed", "rolled_back", or "ambiguous".
 # Args: <log_file> <stack_name>
+#
+# Detection order matters: ROLLBACK indicators MUST be checked before
+# generic success patterns, because CloudFormation's UPDATE_ROLLBACK_COMPLETE
+# substring-matches UPDATE_COMPLETE — a partial deploy that rolled back would
+# otherwise be silently classified as success and the task marked merged.
 detect_log_outcome() {
   local log_file="$1"
   local stack="$2"
@@ -124,16 +138,23 @@ detect_log_outcome() {
   local tail_content
   tail_content=$(tail -n 50 "$log_file" 2>/dev/null || echo "")
 
-  # Success patterns: CDK prints "✅  <stack>", or generic deploy-complete markers.
-  # Case-insensitive grep avoids locale issues.
-  if echo "$tail_content" | grep -qiE '✅|deployed|deploy: complete|UPDATE_COMPLETE'; then
-    echo "succeeded"
+  # 1. Rollback FIRST — must precede the success check (see comment above).
+  #    Covers UPDATE_ROLLBACK_COMPLETE, UPDATE_ROLLBACK_FAILED, ROLLBACK_COMPLETE,
+  #    ROLLBACK_IN_PROGRESS, plus the human-readable "rolled back" variants.
+  if echo "$tail_content" | grep -qiE 'ROLLBACK|rolled back|rolling back'; then
+    echo "rolled_back"
     return
   fi
 
-  # Failure patterns.
-  if echo "$tail_content" | grep -qiE '❌|Failed|Error:|ROLLBACK|UPDATE_FAILED|UPDATE_ROLLBACK'; then
+  # 2. Other failure patterns.
+  if echo "$tail_content" | grep -qiE '❌|Failed|Error:|UPDATE_FAILED|CREATE_FAILED|DELETE_FAILED'; then
     echo "failed"
+    return
+  fi
+
+  # 3. Success patterns (only reached if no rollback/failure indicators above).
+  if echo "$tail_content" | grep -qiE '✅|deployed|deploy: complete|UPDATE_COMPLETE|CREATE_COMPLETE'; then
+    echo "succeeded"
     return
   fi
 
@@ -271,11 +292,12 @@ for status_file in "${STATUS_FILES[@]}"; do
   # Map outcome to exit_code and possibly a failure_reason.
   local_exit_code=1
   local_failure_reason=""
-  if [ "$outcome" = "succeeded" ]; then
-    local_exit_code=0
-  elif [ "$outcome" = "ambiguous" ]; then
-    local_failure_reason="ambiguous_log_outcome"
-  fi
+  case "$outcome" in
+    succeeded)   local_exit_code=0 ;;
+    rolled_back) local_failure_reason="rolled_back" ;;
+    ambiguous)   local_failure_reason="ambiguous_log_outcome" ;;
+    *)           : ;;  # failed — no extra reason, log tail tells the story
+  esac
 
   # Update the deploy status file (not the plan state file — plain write is
   # fine here; this file is only read/written by deploy-watch itself).
