@@ -139,6 +139,20 @@ else
   fi
 fi
 
+# ---- Cost ceiling check (pre-phase-1) ----
+# Runs after preflight-gate, before any phase that could spawn workers.
+# Only active when the plan has an aws_env block and
+# ORCH_COST_BUDGET_USD_PER_MONTH is set. Non-zero exits halt the tick.
+if [ -x ".claude/scripts/cost-check.sh" ]; then
+  if ! bash .claude/scripts/cost-check.sh "$STATE_FILE"; then
+    _cost_rc=$?
+    case "$_cost_rc" in
+      1) echo "tick: cost ceiling hit, halting tick" ; exit 0 ;;
+      *) echo "tick: cost-check error rc=$_cost_rc, halting tick" ; exit "$_cost_rc" ;;
+    esac
+  fi
+fi
+
 # ---- Phase 1: refresh deps ----
 echo "--- phase 1: refresh deps ---"
 bash .claude/scripts/refresh-deps.sh "$STATE_FILE" "$REPO_OWNER_REPO" || \
