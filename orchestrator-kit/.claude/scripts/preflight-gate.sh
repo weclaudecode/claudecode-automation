@@ -55,8 +55,8 @@ PLAN_BASE=$(basename "$STATE_FILE" .state.json)
 OPEN_MATCH=$(gh issue list \
   --search "$ISSUE_TITLE" \
   --state open \
+  --limit 200 \
   --json number,title \
-  2>/dev/null \
   | jq -r --arg t "$ISSUE_TITLE" '.[] | select(.title == $t) | .number' \
   | head -1)
 
@@ -70,8 +70,8 @@ fi
 CLOSED_MATCH=$(gh issue list \
   --search "$ISSUE_TITLE" \
   --state closed \
+  --limit 200 \
   --json number,title \
-  2>/dev/null \
   | jq -r --arg t "$ISSUE_TITLE" '.[] | select(.title == $t) | .number' \
   | head -1)
 
