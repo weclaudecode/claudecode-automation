@@ -31,7 +31,8 @@ bp = Blueprint("config", __name__)
 # (env-var name, default value as string, human description)
 TUNABLES = [
     ("ORCH_MAX_PARALLEL",     "1",        "Max parallel workers per tick"),
-    ("ORCH_WORKER_MODEL",     "sonnet",   "Claude model (sonnet|opus)"),
+    ("ORCH_WORKER_MODEL",     "opus",     "Worker/iterator model (sonnet|opus|haiku)"),
+    ("ORCH_REVIEWER_MODEL",   "opus",     "Reviewer coordinator model (sonnet|opus|haiku)"),
     ("ORCH_MAX_TURNS",        "30",       "claude -p --max-turns cap"),
     ("ORCH_AUTO_RECOMMENDED", "0",        "Default auto-resolve for ambiguous decisions"),
     ("ORCH_LOG_MAX_BYTES",    "10485760", "Log rotation threshold (bytes)"),
