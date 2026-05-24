@@ -87,14 +87,16 @@ function relativeTime(iso) {
   return days + "d ago";
 }
 
-// Renders a CI status dot for a PR row. ci_state from /api/github comes
-// from statusCheckRollup; null means "no checks configured" so we show
-// a dash rather than a misleading green dot.
+// Renders a CI status dot for a PR row. ci_state from /api/github is one of
+// SUCCESS / FAILURE / PENDING / UNKNOWN / null. UNKNOWN means the rollup
+// contained only verdict strings the backend didn't recognise (likely a
+// new GitHub state) — we render it visibly (?) rather than silently
+// falling through to a green dot, so the operator knows to investigate.
 function renderCiDot(ciState) {
   if (!ciState) return '<span class="ci-dot none" title="no CI checks configured">—</span>';
   const cls = String(ciState).toLowerCase();
-  const glyph = cls === "pending" ? "◐" : "●";
-  return '<span class="ci-dot ' + cls + '" title="CI: ' + cls + '">' + glyph + "</span>";
+  const glyph = cls === "pending" ? "◐" : (cls === "unknown" ? "?" : "●");
+  return '<span class="ci-dot ' + esc(cls) + '" title="CI: ' + esc(cls) + '">' + glyph + "</span>";
 }
 
 // Render a help-icon button IF a runbook entry matches the given key.
@@ -171,7 +173,7 @@ function renderAlerts(content, data) {
     '<div class="alerts-header">'
     + '<span class="alerts-title">⚠ ALERTS (' + esc(alerts.length) + ')</span>'
     + '<span class="alerts-counts">' + esc(summaryBits) + "</span>"
-    + '<button type="button" class="alerts-toggle" aria-expanded="' + (!strip.classList.contains("collapsed")) + '">'
+    + '<button type="button" class="alerts-toggle" aria-expanded="' + esc(!strip.classList.contains("collapsed")) + '">'
     + (strip.classList.contains("collapsed") ? "expand" : "collapse")
     + "</button>"
     + "</div>";
@@ -411,12 +413,21 @@ function openPopover(anchor, titleHTML, bodyHTML, snippetForCopy) {
   const copyBtn = popover.querySelector(".popover-copy");
   if (copyBtn && snippetForCopy != null) {
     copyBtn.addEventListener("click", function () {
-      if (navigator.clipboard) {
-        navigator.clipboard.writeText(snippetForCopy).then(function () {
-          copyBtn.textContent = "copied ✓";
-          setTimeout(function () { copyBtn.textContent = "copy"; }, 1200);
-        });
+      if (!navigator.clipboard) {
+        copyBtn.textContent = "copy unavailable";
+        return;
       }
+      navigator.clipboard.writeText(snippetForCopy).then(function () {
+        copyBtn.textContent = "copied ✓";
+        setTimeout(function () { copyBtn.textContent = "copy"; }, 1200);
+      }).catch(function (err) {
+        // Permission denial (Safari without user gesture, http:// origin,
+        // sandboxed iframe). Surface the failure so the button doesn't
+        // stay stuck on "copy" indefinitely.
+        copyBtn.textContent = "copy failed";
+        setTimeout(function () { copyBtn.textContent = "copy"; }, 2000);
+        console.warn("clipboard write failed:", err);
+      });
     });
   }
 }
@@ -494,8 +505,8 @@ function wireControls() {
   });
 
   document.addEventListener("keydown", function (e) {
-    // Don't hijack keys when the user is typing into an input (none today,
-    // but cheap insurance against the log-filter input in Tier 2).
+    // Don't hijack keys when an input/textarea has focus — the operator
+    // is typing, not navigating.
     if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
     if (e.key === "Escape") {
       if (state.activePopover) { closePopover(); return; }
@@ -503,8 +514,8 @@ function wireControls() {
       return;
     }
     if (e.key === "r") { refreshAll(); return; }
-    if (e.key === "p") { pauseBtn.click(); return; }
-    if (e.key === "?") { helpOverlay.hidden ? showHelp() : hideHelp(); return; }
+    if (e.key === "p" && pauseBtn) { pauseBtn.click(); return; }
+    if (e.key === "?" && helpOverlay) { helpOverlay.hidden ? showHelp() : hideHelp(); return; }
   });
 }
 

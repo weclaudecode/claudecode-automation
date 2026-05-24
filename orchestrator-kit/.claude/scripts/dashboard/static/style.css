@@ -247,6 +247,7 @@ ul.bare li:last-child { border-bottom: none; }
 .ci-dot.success { color: var(--status-merged); }
 .ci-dot.failure { color: var(--status-blocked); }
 .ci-dot.pending { color: var(--status-in_review); }
+.ci-dot.unknown { color: var(--warn); font-weight: 700; }
 .ci-dot.none    { color: var(--fg-dim); }
 
 /* ---------------------------------------------------------------------- *
