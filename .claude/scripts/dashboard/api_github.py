@@ -11,15 +11,26 @@ stderr on failure for the error envelope.
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import threading
 import time
+from datetime import datetime
 
 from flask import Blueprint, jsonify
 
 from dashboard.app import json_envelope
 
 bp = Blueprint("github", __name__)
+log = logging.getLogger("dashboard.github")
+
+# Verdict buckets for statusCheckRollup. Any verdict not in either of these
+# tuples is treated as UNKNOWN rather than silently rolling up to SUCCESS —
+# guards against GitHub adding new states (RETRY, NEUTRAL, STALE, etc.)
+# whose semantics we can't safely assume.
+_FAILURE_VERDICTS = ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED")
+_PENDING_VERDICTS = ("PENDING", "IN_PROGRESS", "QUEUED", "WAITING", "EXPECTED")
+_SUCCESS_VERDICTS = ("SUCCESS", "COMPLETED", "NEUTRAL", "SKIPPED")
 
 _CACHE_TTL_SECONDS = 30
 _GH_TIMEOUT_SECONDS = 10
@@ -81,7 +92,7 @@ def _fetch_payload() -> tuple[dict | None, str | None]:
         "pr", "list",
         "--repo", repo,
         "--state", "all",
-        "--json", "number,title,state,mergedAt,url",
+        "--json", "number,title,state,mergedAt,url,statusCheckRollup",
         "--limit", "30",
     ])
     if rc != 0:
@@ -109,6 +120,7 @@ def _fetch_payload() -> tuple[dict | None, str | None]:
             "state": item.get("state", ""),
             "merged_at": item.get("mergedAt"),
             "url": item.get("url", ""),
+            "ci_state": _derive_ci_state(item.get("statusCheckRollup")),
         }
         for item in prs_raw
     ]
@@ -126,15 +138,60 @@ def _fetch_payload() -> tuple[dict | None, str | None]:
     return {"open_issues": open_issues, "recent_prs": recent_prs}, None
 
 
+def _derive_ci_state(rollup) -> str | None:
+    """Collapse `gh`'s per-check rollup into a single state for the dot.
+
+    Return values:
+        None       — empty/missing rollup (PR has no CI checks configured)
+        "FAILURE"  — at least one known-failure verdict
+        "PENDING"  — at least one known-pending verdict and no failures
+        "SUCCESS"  — every check is a known-success verdict
+        "UNKNOWN"  — the rollup is non-empty but every verdict is one we
+                     don't recognise (e.g. a new GitHub state). Distinct
+                     from None so the frontend can flag it; we do not
+                     silently roll up to SUCCESS in that case.
+
+    `statusCheckRollup` is a list of per-check objects whose shape varies
+    (status checks expose `state`, check-runs expose `conclusion`+`status`).
+    Verdict buckets are module-level constants so the failure-modes are
+    visible to readers without having to scroll the loop.
+    """
+    if not isinstance(rollup, list) or not rollup:
+        return None
+    has_pending = False
+    has_success = False
+    for check in rollup:
+        if not isinstance(check, dict):
+            continue
+        verdict = (
+            (check.get("conclusion") or check.get("state") or check.get("status") or "")
+            .upper()
+        )
+        if verdict in _FAILURE_VERDICTS:
+            return "FAILURE"
+        if verdict in _PENDING_VERDICTS:
+            has_pending = True
+        elif verdict in _SUCCESS_VERDICTS:
+            has_success = True
+    if has_pending:
+        return "PENDING"
+    if has_success:
+        return "SUCCESS"
+    return "UNKNOWN"
+
+
 def _to_epoch(iso: str | None) -> float:
     if not iso:
         return 0.0
-    # gh emits RFC3339 like "2026-05-23T01:02:03Z"; treat 'Z' as UTC.
+    # gh emits RFC3339 like "<ISO8601>Z"; treat 'Z' as UTC.
     try:
-        from datetime import datetime
         s = iso.replace("Z", "+00:00")
         return datetime.fromisoformat(s).timestamp()
     except (ValueError, TypeError):
+        # Logged at warning so the silent 1970-sort still has a breadcrumb
+        # in dashboard.log; we don't raise because PR-row ordering is a
+        # nice-to-have, not a correctness contract.
+        log.warning("api_github: _to_epoch failed to parse %r", iso)
         return 0.0
 
 

@@ -17,8 +17,13 @@
     <div class="controls">
       <button id="pause-toggle" type="button" aria-pressed="false">pause polling</button>
       <span class="status" id="poll-status">polling every 5s</span>
+      <button id="help-toggle" type="button" aria-label="show keyboard shortcuts and glossary">?</button>
     </div>
   </header>
+
+  <section data-panel="alerts" id="alerts-strip" class="empty" role="status" aria-live="polite" aria-label="operator alerts">
+    <div class="content"></div>
+  </section>
 
   <main class="grid">
     <section data-panel="plan">
@@ -77,6 +82,44 @@
     </section>
   </main>
 
+  <div id="help-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="help-overlay-title">
+    <div class="help-card">
+      <div class="help-header">
+        <h2 id="help-overlay-title">orchestrator dashboard — quick reference</h2>
+        <button type="button" id="help-close" aria-label="close help">×</button>
+      </div>
+      <div class="help-body">
+        <h3>Keyboard</h3>
+        <dl class="kv">
+          <dt>r</dt><dd>refresh all panels</dd>
+          <dt>p</dt><dd>toggle polling</dd>
+          <dt>?</dt><dd>open / close this help</dd>
+          <dt>Esc</dt><dd>close any open popover or this help</dd>
+        </dl>
+        <h3>Status badges</h3>
+        <ul class="bare">
+          <li><span class="status-badge pending">pending</span> not yet scheduled — waiting for deps or slot</li>
+          <li><span class="status-badge in_progress">in_progress</span> worker is running in a worktree</li>
+          <li><span class="status-badge in_review">in_review</span> PR is open; reviewer / iterator may act</li>
+          <li><span class="status-badge merged">merged</span> PR merged to main — terminal</li>
+          <li><span class="status-badge blocked">blocked</span> halted; cascade-blocks dependents</li>
+        </ul>
+        <h3>Alert severity</h3>
+        <ul class="bare">
+          <li>❗ <strong>error</strong> — needs operator attention (blocked task, dead orchestrator)</li>
+          <li>⚠ <strong>warn</strong> — sensitive merge held, urgent monitor finding</li>
+          <li>ⓘ <strong>info</strong> — slower-burn monitor finding</li>
+        </ul>
+        <h3>Docs</h3>
+        <ul class="bare">
+          <li><a href="https://github.com/weclaudecode/claudecode-automation/blob/main/orchestrator-kit/docs/DASHBOARD.md" target="_blank" rel="noopener">DASHBOARD.md</a> — operator reference</li>
+          <li><a href="https://github.com/weclaudecode/claudecode-automation/blob/main/orchestrator-kit/README.md" target="_blank" rel="noopener">orchestrator-kit README</a> — full kit docs incl. resume / unblock recipes</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/runbook.js"></script>
   <script src="/static/dashboard.js"></script>
 </body>
 </html>
