@@ -81,7 +81,7 @@ def _fetch_payload() -> tuple[dict | None, str | None]:
         "pr", "list",
         "--repo", repo,
         "--state", "all",
-        "--json", "number,title,state,mergedAt,url",
+        "--json", "number,title,state,mergedAt,url,statusCheckRollup",
         "--limit", "30",
     ])
     if rc != 0:
@@ -109,6 +109,7 @@ def _fetch_payload() -> tuple[dict | None, str | None]:
             "state": item.get("state", ""),
             "merged_at": item.get("mergedAt"),
             "url": item.get("url", ""),
+            "ci_state": _derive_ci_state(item.get("statusCheckRollup")),
         }
         for item in prs_raw
     ]
@@ -124,6 +125,36 @@ def _fetch_payload() -> tuple[dict | None, str | None]:
     )
 
     return {"open_issues": open_issues, "recent_prs": recent_prs}, None
+
+
+def _derive_ci_state(rollup) -> str | None:
+    """Collapse `gh`'s per-check rollup into a single state for the dot.
+
+    `statusCheckRollup` is a list of per-check objects whose shape varies
+    (status checks expose `state`, check-runs expose `conclusion`+`status`).
+    We treat the union: any failure dominates, else any pending wins, else
+    success. An empty/missing rollup means "no checks configured" — render
+    as None so the frontend shows a dash instead of a misleading green dot.
+    """
+    if not isinstance(rollup, list) or not rollup:
+        return None
+    has_pending = False
+    for check in rollup:
+        if not isinstance(check, dict):
+            continue
+        # Normalise to an upper-case verdict string drawn from whichever
+        # field is populated. `conclusion` is the post-completion verdict
+        # for check-runs; `status` is the in-flight one; `state` is the
+        # status-checks field.
+        verdict = (
+            (check.get("conclusion") or check.get("state") or check.get("status") or "")
+            .upper()
+        )
+        if verdict in ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"):
+            return "FAILURE"
+        if verdict in ("PENDING", "IN_PROGRESS", "QUEUED", "WAITING", "EXPECTED"):
+            has_pending = True
+    return "PENDING" if has_pending else "SUCCESS"
 
 
 def _to_epoch(iso: str | None) -> float:

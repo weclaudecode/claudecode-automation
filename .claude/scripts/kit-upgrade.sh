@@ -178,10 +178,15 @@ KIT_DIRS=(
 for d in "${KIT_DIRS[@]}"; do
   if [ -d "$SOURCE/$d" ]; then
     # -type f catches regular files; -print0 / sort handle awkward names.
+    # Exclude Python bytecode artefacts (__pycache__ trees, *.pyc) — these
+    # are runtime-generated, not kit-owned. Including them caused the
+    # manifest to list .pyc files as MISSING/DRIFT on every run.
     while IFS= read -r -d '' f; do
       rel="${f#"$SOURCE/"}"
       echo "$rel" >> "$MANIFEST_FILE"
-    done < <(find "$SOURCE/$d" -type f -print0)
+    done < <(find "$SOURCE/$d" \
+              -type d -name __pycache__ -prune -o \
+              -type f -not -name '*.pyc' -print0)
   fi
 done
 
