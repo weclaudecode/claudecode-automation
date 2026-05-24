@@ -22,7 +22,7 @@ pre-push review and conditional auto-merge.
   weaker signal). Install with `claude plugin install pr-review-toolkit`.
 - A GitHub repo with `main` branch and branch protection allowing `--auto` merges
 - Optional: cron / launchd for scheduled triggers
-- Optional: `python3 >= 3.11` — only needed if you use the [local dashboard](docs/DASHBOARD.md)
+- **`python3 >= 3.11` + `PyYAML`** — required. `ingest-plan.sh` shells out to `python3 -c 'import yaml'` to parse `---` plan frontmatter (the `aws:`, `env:`, `requires:`, `pre_flight:` keys added in PLAN-05). Install with `pip install pyyaml`. Also used by the dep-cycle detector and the optional [local dashboard](docs/DASHBOARD.md).
 
 ```bash
 brew install gh jq gawk     # macOS — gawk is required
