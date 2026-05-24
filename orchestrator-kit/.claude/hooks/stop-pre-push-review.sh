@@ -29,13 +29,39 @@ set -uo pipefail
 REPO=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 cd "$REPO"
 
-# Detect orchestrator-driven session via active plan state file.
+# Detect orchestrator-driven session.
+#
+# An in_progress state file alone is NOT sufficient — a plan can be
+# in_progress while the operator is implementing it manually in an
+# interactive Claude Code session (no worktree, no claude/plan-* branch).
+# That false positive blocked Stop on dogfood / source repos where plans
+# get authored but the orchestrator never ticks against them.
+#
+# A real worker session has at least one of:
+#   1. Branch matches claude/plan-NN-task-M (launch-worker.sh convention)
+#   2. CWD ends in /wt-planNN-tM (launch-worker.sh worktree convention)
+# Either is enough; require at least one in addition to the state file.
+
 STATE_FILE=$(ls -t .claude/plans/*.state.json 2>/dev/null \
   | xargs -I {} sh -c 'jq -er ".status == \"in_progress\"" {} >/dev/null 2>&1 && echo {}' \
   | tail -1)
-
-# Not orchestrator-driven: human session, allow stop unconditionally.
 [ -z "$STATE_FILE" ] && exit 0
+
+CURRENT_BRANCH=$(git symbolic-ref --short -q HEAD 2>/dev/null || echo "")
+case "$CURRENT_BRANCH" in
+  claude/plan-*-task-*) WORKER_SESSION=1 ;;
+  *)                    WORKER_SESSION=0 ;;
+esac
+
+if [ "$WORKER_SESSION" -eq 0 ]; then
+  case "$PWD" in
+    *"/wt-plan"*"-t"*)  WORKER_SESSION=1 ;;
+  esac
+fi
+
+# Interactive session (or operator manually editing): the plan-state signal
+# alone is not enough. Let Stop through without checking diff.
+[ "$WORKER_SESSION" -eq 0 ] && exit 0
 
 # Orchestrator-driven: smoke-check that the worker produced something.
 # Prefer origin/main as the base; fall back to local main if origin missing.
@@ -46,6 +72,9 @@ DIFF=$(git diff origin/main...HEAD 2>/dev/null) \
 if [ -z "$DIFF" ]; then
   cat >&2 <<EOF
 stop hook: no diff vs origin/main — worker produced nothing.
+
+Branch: $CURRENT_BRANCH
+CWD:    $PWD
 
 The post-push reviewer would have nothing to review and the push
 would fail. Treating this as a worker bug rather than a clean exit.
