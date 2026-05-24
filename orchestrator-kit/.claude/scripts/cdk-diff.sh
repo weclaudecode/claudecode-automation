@@ -104,6 +104,7 @@ PARENT_DIR=$(dirname "$REPO_ROOT")
 WT_DIR="$PARENT_DIR/cdk-diff-wt-pr${PR_NUM}-${HEAD_SHA:0:8}"
 
 # Cleanup trap — runs on every exit path including signals.
+# shellcheck disable=SC2329  # invoked via trap, shellcheck can't trace it
 cleanup_worktree() {
   if [ -d "$WT_DIR" ]; then
     git worktree remove --force "$WT_DIR" 2>/dev/null || true

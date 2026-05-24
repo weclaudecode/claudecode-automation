@@ -164,7 +164,10 @@ if [ "$(jq -r '.aws_env // empty' "$STATE_FILE")" != "" ]; then
   echo "review-pr: aws_env detected — running cdk-diff.sh for PR #$PR_NUM..." >&2
   CDK_DIFF_SCRIPT="$REPO_ROOT/.claude/scripts/cdk-diff.sh"
   if [ -x "$CDK_DIFF_SCRIPT" ]; then
-    CDK_DIFF_TEXT=$(bash "$CDK_DIFF_SCRIPT" "$PR_NUM" "$STATE_FILE" 2>&1) || {
+    # Capture stdout only (structured diff text). cdk-diff's stderr is
+    # operator-facing diagnostics — letting it flow to our own stderr keeps
+    # the reviewer prompt clean and the tick log informative.
+    CDK_DIFF_TEXT=$(bash "$CDK_DIFF_SCRIPT" "$PR_NUM" "$STATE_FILE") || {
       echo "review-pr: cdk-diff failed (exit $?) — continuing with text-only review" >&2
       CDK_DIFF_TEXT=""
     }
