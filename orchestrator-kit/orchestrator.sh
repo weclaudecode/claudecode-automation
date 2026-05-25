@@ -25,6 +25,23 @@ set -uo pipefail
 REPO=$(git rev-parse --show-toplevel)
 cd "$REPO"
 
+# Source operator config if present (.envrc, .claude/orchestrator.env).
+# Why: Claude Code's Bash tool spawns non-interactive subshells, so
+# direnv-style .envrc exports never reach this script otherwise — the
+# orchestrator silently falls back to defaults (e.g. ORCH_MAX_PARALLEL=1,
+# ORCH_WORKER_TIMEOUT=600) instead of the operator's chosen values.
+# Sourcing errors are tolerated: the resolved values still appear in
+# the tick header, so misconfig is visible without aborting the tick.
+for _orch_cfg in .envrc .claude/orchestrator.env; do
+  if [ -f "$_orch_cfg" ]; then
+    # shellcheck source=/dev/null
+    set +u
+    source "$_orch_cfg" 2>/dev/null || true
+    set -u
+  fi
+done
+unset _orch_cfg
+
 # shellcheck source=.claude/scripts/_dispatcher_lib.sh
 source "$REPO/.claude/scripts/_dispatcher_lib.sh"
 
