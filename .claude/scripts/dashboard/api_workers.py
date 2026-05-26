@@ -16,6 +16,7 @@ and the kit's `claude/plan-<NN>-task-<M>` branch convention.
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import os
 import re
 import shlex
@@ -30,6 +31,19 @@ bp = Blueprint("workers", __name__)
 
 _PS_TIMEOUT_SECONDS = 5
 _ACTIVE_WORKTREES_FILE = ".claude/state/active_worktrees.txt"
+_STATE_DIR = ".claude/state"
+
+# Last-log preview is rendered into the Active Workers panel as a single
+# line. 200 chars keeps it readable in the narrow worker card without
+# horizontal scroll; longer tails get an ellipsis.
+_LAST_LOG_PREVIEW_MAX = 200
+
+# Tool-use input keys ranked by "most descriptive when shown alone". Bash
+# tasks usually have a `description`; file ops have `file_path`; search
+# tools have `pattern` or `query`. Whichever hits first wins.
+_TOOL_INPUT_SUMMARY_KEYS = (
+    "description", "command", "file_path", "path", "pattern", "query", "url",
+)
 
 # wt-plan01-t3, wt-plan12-t10, etc. — see launch-worker.sh.
 _WT_NAME_RE = re.compile(r"wt-plan(\d+)-t(\d+)$")
@@ -113,6 +127,122 @@ def _looks_like_claude_worker(cmdline: str) -> bool:
         return False
     tokens = cmdline.split()
     return any(t == "-p" or t == "--print" for t in tokens)
+
+
+def _trim_to_one_line(text: str) -> str:
+    # Collapse all whitespace runs (incl. newlines) to a single space, then
+    # truncate with an ellipsis. The panel renders one row per worker, so
+    # the field must never contain a newline regardless of what the model
+    # emitted.
+    flat = " ".join(text.split())
+    if len(flat) > _LAST_LOG_PREVIEW_MAX:
+        return flat[: _LAST_LOG_PREVIEW_MAX - 1].rstrip() + "…"
+    return flat
+
+
+def _tool_use_summary(name: str, input_obj: object) -> str:
+    if not isinstance(input_obj, dict):
+        return ""
+    for key in _TOOL_INPUT_SUMMARY_KEYS:
+        val = input_obj.get(key)
+        if isinstance(val, str) and val.strip():
+            return f"{key}={val}"
+    for k, v in input_obj.items():
+        if isinstance(v, str) and v.strip():
+            return f"{k}={v}"
+    return ""
+
+
+def _meaningful_text_from_event(event: object) -> str | None:
+    # Three known event shapes from `claude -p`:
+    #   1. Final result:  {"type":"result","result":"...","is_error":bool}
+    #      — what --output-format json emits as a single object today.
+    #   2. Assistant msg: {"type":"assistant","message":{"content":[blocks]}}
+    #      — stream-json shape; blocks are {type:"text"} or {type:"tool_use"}.
+    #   3. Standalone tool_use event (some stream variants).
+    if not isinstance(event, dict):
+        return None
+    ev_type = event.get("type")
+    if ev_type == "result":
+        if event.get("is_error"):
+            err = event.get("error") or event.get("result")
+            return f"error: {err}" if isinstance(err, str) and err.strip() else "error"
+        result = event.get("result")
+        if isinstance(result, str) and result.strip():
+            return result
+        return None
+    if ev_type == "assistant":
+        msg = event.get("message")
+        if isinstance(msg, dict):
+            content = msg.get("content")
+            if isinstance(content, list):
+                # Walk from end — most recent block wins. text > tool_use.
+                for block in reversed(content):
+                    if not isinstance(block, dict):
+                        continue
+                    btype = block.get("type")
+                    if btype == "text":
+                        txt = block.get("text")
+                        if isinstance(txt, str) and txt.strip():
+                            return txt
+                    elif btype == "tool_use":
+                        name = block.get("name") or "tool"
+                        summary = _tool_use_summary(name, block.get("input"))
+                        return f"→ {name}({summary})" if summary else f"→ {name}"
+        return None
+    if ev_type == "tool_use":
+        name = event.get("name") or "tool"
+        summary = _tool_use_summary(name, event.get("input"))
+        return f"→ {name}({summary})" if summary else f"→ {name}"
+    return None
+
+
+def _last_log_for_task(task_n: int) -> str | None:
+    # Best-effort: NEVER raise. Returns a one-line preview of the most
+    # recent meaningful message in the worker's newest run JSON, or None
+    # if the file is missing, empty, malformed, or has no surfaceable
+    # text. The Active Workers panel treats None as "no preview yet".
+    try:
+        repo_root = Path.cwd()
+        state_dir = repo_root / _STATE_DIR
+        if not state_dir.is_dir():
+            return None
+        matches = sorted(
+            state_dir.glob(f"run-plan*-t{task_n}-r*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not matches:
+            return None
+        raw = matches[0].read_text(encoding="utf-8", errors="replace")
+        if not raw.strip():
+            return None
+        # Single-object JSON first (current `--output-format json` shape).
+        try:
+            doc = json.loads(raw)
+        except json.JSONDecodeError:
+            doc = None
+        if doc is not None:
+            preview = _meaningful_text_from_event(doc)
+            if preview:
+                return _trim_to_one_line(preview)
+        # JSONL fallback (future stream-json output). Walk from the tail
+        # so we surface the most recent event, not the first.
+        for line in reversed(raw.splitlines()):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                event = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            preview = _meaningful_text_from_event(event)
+            if preview:
+                return _trim_to_one_line(preview)
+        return None
+    except Exception:
+        # Defensive: one corrupt run file must not crash the panel.
+        return None
 
 
 def _list_processes() -> tuple[list[dict], str | None]:
@@ -215,6 +345,7 @@ def _list_worktrees() -> list[dict]:
             "path": path,
             "branch": branch,
             "task_n": task_n,
+            "last_log": _last_log_for_task(task_n) if task_n is not None else None,
         })
     return out
 
