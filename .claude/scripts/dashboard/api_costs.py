@@ -1,4 +1,18 @@
-"""Costs endpoint + helpers — per-task cost rollup and today's spend.
+"""Usage endpoint + helpers — per-task token + cost rollup and today's spend.
+
+Subscription-aware: on Claude Code Max plans the dollar number is
+**notional** (what the tokens would cost on the metered pay-per-token API).
+Tokens are the canonical unit a Max subscriber actually cares about
+(rate-limit headroom, relative task complexity). This module exposes both:
+
+  cost_for_task(plan, task)    → USD float (notional on Max)
+  cost_today()                  → {today_usd, by_role, ...}
+  tokens_for_task(plan, task)   → {input, output, cache_read, cache_write, total}
+  tokens_today()                → {total, input, output, cache_read, cache_write, by_role}
+
+The frontend (T5) decides which to feature; the data is here either way.
+File name stays `api_costs.py` for spec/route stability; "cost" here
+covers both tokens and the notional dollar view.
 
 Source-of-truth note
 --------------------
@@ -6,15 +20,15 @@ The spec (`orchestrator-kit/docs/SPEC-mission-centre.md`) asked for cost to
 be computed by walking `.claude/state/run-<task>-r<retry>.json` files and
 multiplying tokens by a hardcoded pricing table. After implementation
 review, we deviate: the orchestrator's existing `update_task_usage` in
-`_dispatcher_lib.sh` already persists per-run cost data into the state
-file under `tasks[N].usage.runs[]` with `kind` (worker / iterator /
+`_dispatcher_lib.sh` already persists per-run cost + token data into the
+state file under `tasks[N].usage.runs[]` with `kind` (worker / iterator /
 reviewer), `cost_usd`, ISO `run_at`, and full token breakdowns. Reading
 the state file is strictly better:
 
-  - Reviewer cost is captured here. `review-pr.sh` writes its
+  - Reviewer usage is captured here. `review-pr.sh` writes its
     `claude -p` output to a tmpfile that gets cleaned up via trap; the
     only persistent record of reviewer spend is the state file.
-  - Worker, iterator, and reviewer costs are pre-aggregated and tagged
+  - Worker, iterator, and reviewer usage are pre-aggregated and tagged
     with their role — no filename-pattern guessing.
   - `total_cost_usd` is taken from `claude -p`'s own output, which is
     canonical. Our pricing table is only needed as a fallback when an
@@ -152,6 +166,22 @@ def _state_file_paths() -> list[str]:
     )
 
 
+# ── Token accounting helpers ───────────────────────────────────────────────
+
+_TOKEN_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+_TOKEN_OUT_KEYS = ("input", "output", "cache_read", "cache_write")  # display-friendly aliases
+_TOKEN_RUN_TO_OUT = dict(zip(_TOKEN_KEYS, _TOKEN_OUT_KEYS))
+
+
+def _run_tokens(run: dict[str, Any]) -> dict[str, int]:
+    """Per-run token breakdown using display-friendly keys."""
+    return {out_k: int(run.get(in_k, 0) or 0) for in_k, out_k in _TOKEN_RUN_TO_OUT.items()}
+
+
+def _zero_tokens() -> dict[str, int]:
+    return {k: 0 for k in _TOKEN_OUT_KEYS} | {"total": 0}
+
+
 # ── Public helpers (also used by api_board.py in T4) ───────────────────────
 
 def cost_for_task(plan: str, task: int) -> float:
@@ -231,29 +261,144 @@ def cost_today() -> dict[str, Any]:
     }
 
 
+def tokens_for_task(plan: str, task: int) -> dict[str, int]:
+    """Total tokens consumed by (plan, task) across all runs.
+
+    Returns `{input, output, cache_read, cache_write, total}`. Total is
+    the sum of all four (the meaningful "this task burned N tokens"
+    headline number, since each category is a distinct meter). Returns
+    all-zero dict if no usage data.
+    """
+    matches = [
+        p for p in _state_file_paths()
+        if Path(p).stem.startswith(plan + "-") or Path(p).stem.startswith(plan + ".")
+        or Path(p).stem == f"{plan}.state"
+    ]
+    tot = _zero_tokens()
+    for path in matches:
+        runs = (
+            _load_state(path)
+            .get("tasks", {})
+            .get(str(task), {})
+            .get("usage", {})
+            .get("runs", [])
+        )
+        for r in runs:
+            if not isinstance(r, dict):
+                continue
+            t = _run_tokens(r)
+            for k in _TOKEN_OUT_KEYS:
+                tot[k] += t[k]
+    tot["total"] = sum(tot[k] for k in _TOKEN_OUT_KEYS)
+    return tot
+
+
+def tokens_today() -> dict[str, Any]:
+    """Today's token consumption across all active + archived plans.
+
+    Returns `{total, input, output, cache_read, cache_write, by_role,
+    yesterday_total, this_week_total}` or `{}` if no usage data exists.
+    Days are UTC. The Max-subscription-friendly headline number is
+    `total` (sum of all four categories).
+    """
+    now = _dt.datetime.now(_dt.timezone.utc).date()
+    yesterday = now - _dt.timedelta(days=1)
+    week_start = now - _dt.timedelta(days=6)
+
+    today = _zero_tokens()
+    by_role: dict[str, dict[str, int]] = {
+        "worker":   _zero_tokens(),
+        "iterator": _zero_tokens(),
+        "reviewer": _zero_tokens(),
+    }
+    yesterday_total = 0
+    week_total = 0
+    any_data = False
+
+    for path in _state_file_paths():
+        state = _load_state(path)
+        for task in (state.get("tasks") or {}).values():
+            for run in (task.get("usage") or {}).get("runs") or []:
+                if not isinstance(run, dict):
+                    continue
+                any_data = True
+                run_at = run.get("run_at") or ""
+                try:
+                    ts = _dt.datetime.fromisoformat(run_at.replace("Z", "+00:00")).date()
+                except (TypeError, ValueError):
+                    continue
+                t = _run_tokens(run)
+                run_total = sum(t.values())
+                if ts == now:
+                    for k in _TOKEN_OUT_KEYS:
+                        today[k] += t[k]
+                    role = run.get("kind") or "worker"
+                    if role in by_role:
+                        for k in _TOKEN_OUT_KEYS:
+                            by_role[role][k] += t[k]
+                if ts == yesterday:
+                    yesterday_total += run_total
+                if ts >= week_start:
+                    week_total += run_total
+
+    if not any_data:
+        return {}
+
+    today["total"] = sum(today[k] for k in _TOKEN_OUT_KEYS)
+    for role_dict in by_role.values():
+        role_dict["total"] = sum(role_dict[k] for k in _TOKEN_OUT_KEYS)
+
+    return {
+        **today,
+        "by_role": by_role,
+        "yesterday_total": yesterday_total,
+        "this_week_total": week_total,
+    }
+
+
 # ── Flask route ────────────────────────────────────────────────────────────
 
 @bp.route("/api/costs")
 def api_costs():
-    """Today's spend + per-active-plan task cost summary.
+    """Today's usage (tokens + notional $) plus per-active-plan task breakdown.
 
-    Returns `cost_today()` plus a per-task breakdown for every active
-    (non-archived) plan, so a single fetch can power both the right-rail
-    Cost panel and per-card cost badges.
+    Single fetch powers:
+      - Right-rail headline panel (tokens.total today, by_role)
+      - Notional API-equivalent $ as secondary signal
+      - Done-card token / $ badges
+
+    Schema:
+      {
+        today_tokens: {input, output, cache_read, cache_write, total, by_role, ...}
+        today_cost:   {today_usd, by_role, yesterday_usd, this_week_usd}
+        per_task:     {<plan>: {<task>: {tokens: {...}, cost_usd: float}}}
+      }
     """
     try:
-        today = cost_today()
-        per_task: dict[str, dict[str, float]] = {}
+        today_tokens = tokens_today()
+        today_cost = cost_today()
+        per_task: dict[str, dict[str, dict[str, Any]]] = {}
         for path in glob.glob(".claude/plans/*.state.json"):
             state = _load_state(path)
             plan = (state.get("plan_file") or Path(path).stem).split("/")[-1].removesuffix(".md").removesuffix(".state")
+            try:
+                plan_short = plan.split("-")[0] + "-" + plan.split("-")[1]
+            except IndexError:
+                continue
             tasks = state.get("tasks") or {}
             per_task[plan] = {}
             for task_id in tasks:
                 try:
-                    per_task[plan][task_id] = cost_for_task(plan.split("-")[0] + "-" + plan.split("-")[1], int(task_id))
+                    per_task[plan][task_id] = {
+                        "tokens": tokens_for_task(plan_short, int(task_id)),
+                        "cost_usd": cost_for_task(plan_short, int(task_id)),
+                    }
                 except (ValueError, IndexError):
                     continue
-        return jsonify(json_envelope(data={"today": today, "per_task": per_task}))
+        return jsonify(json_envelope(data={
+            "today_tokens": today_tokens,
+            "today_cost": today_cost,
+            "per_task": per_task,
+        }))
     except Exception as e:  # noqa: BLE001 — best-effort endpoint
         return jsonify(json_envelope(error=f"api_costs: {type(e).__name__}: {e}"))
