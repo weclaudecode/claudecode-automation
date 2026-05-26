@@ -1,0 +1,23 @@
+[
+  { "name": "Pip",     "seed": "Pip",     "role": "worker" },
+  { "name": "Bento",   "seed": "Bento",   "role": "worker" },
+  { "name": "Nova",    "seed": "Nova",    "role": "worker" },
+  { "name": "Echo",    "seed": "Echo",    "role": "worker" },
+  { "name": "Glitch",  "seed": "Glitch",  "role": "worker" },
+  { "name": "Bug",     "seed": "Bug",     "role": "worker" },
+  { "name": "Mochi",   "seed": "Mochi",   "role": "worker" },
+  { "name": "Cosmo",   "seed": "Cosmo",   "role": "worker" },
+  { "name": "Pixel",   "seed": "Pixel",   "role": "worker" },
+  { "name": "Spark",   "seed": "Spark",   "role": "worker" },
+  { "name": "Tofu",    "seed": "Tofu",    "role": "worker" },
+  { "name": "Otter",   "seed": "Otter",   "role": "worker" },
+  { "name": "Pepper",  "seed": "Pepper",  "role": "worker" },
+  { "name": "Patch",   "seed": "Patch",   "role": "worker" },
+  { "name": "Loop",    "seed": "Loop",    "role": "worker" },
+  { "name": "Snap",    "seed": "Snap",    "role": "worker" },
+  { "name": "Tweak",   "seed": "Tweak",   "role": "worker" },
+  { "name": "Zog",     "seed": "Zog",     "role": "worker" },
+  { "name": "Boop",    "seed": "Boop",    "role": "worker" },
+  { "name": "Comet",   "seed": "Comet",   "role": "worker" },
+  { "name": "Argus",   "seed": "Argus",   "role": "reviewer" }
+]
