@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mission Centre — Unified Mockup</title>
+<style>
+  /* ───────────────────────────────────────────────────────────────────────
+     STATIC MOCKUP v2 — unified Mission Centre.
+     Board + workers + plan status + cost + live log + activity + GitHub
+     all on one page. Board cards are compact so all 7 columns fit at
+     short height; remaining viewport hosts the supporting panels. Only
+     the Todo column scrolls.
+     ─────────────────────────────────────────────────────────────────────── */
+
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1f242c;
+    --border: #2d333b;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --text-faint: #6e7681;
+
+    --col-backlog:   #6e7681;
+    --col-todo:      #58a6ff;
+    --col-progress:  #d29922;
+    --col-rfr:       #a371f7;
+    --col-review:    #db61a2;
+    --col-blocked:   #f85149;
+    --col-done:      #3fb950;
+
+    --plan-3: #fbbf24;
+    --plan-5: #b392f0;
+    --plan-7: #f472b6;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    min-height: 100vh;
+  }
+  a { color: inherit; text-decoration: none; }
+
+  /* ── Top nav (same as v1) ─────────────────────────────────────────── */
+  .nav {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 20px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav h1 { margin: 0; font-size: 16px; font-weight: 600; }
+  .nav h1 .accent { color: var(--col-todo); }
+  .nav .tabs { display: flex; gap: 4px; margin-left: 20px; }
+  .nav .tab {
+    padding: 6px 12px;
+    border-radius: 6px;
+    color: var(--text-dim);
+    font-size: 13px;
+  }
+  .nav .tab.active {
+    background: var(--panel-2);
+    color: var(--text);
+    box-shadow: inset 0 -2px 0 var(--col-todo);
+  }
+  .nav .meta {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-faint);
+    display: flex;
+    gap: 16px;
+    align-items: center;
+  }
+  .nav .meta .dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    margin-right: 4px;
+    vertical-align: middle;
+    background: var(--col-done);
+    box-shadow: 0 0 6px var(--col-done);
+  }
+
+  /* ── Alerts strip (shown when there are alerts) ───────────────────── */
+  .alerts {
+    display: flex;
+    gap: 8px;
+    padding: 8px 20px;
+    background: rgba(248, 81, 73, 0.06);
+    border-bottom: 1px solid rgba(248, 81, 73, 0.2);
+    font-size: 12px;
+  }
+  .alerts .a {
+    background: var(--panel);
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .alerts .a.warn { border-color: rgba(210, 153, 34, 0.4); }
+  .alerts .a.err  { border-color: rgba(248, 81, 73, 0.4); }
+
+  /* ── Main grid: board+log+bottom on left, right rail on right ─── */
+  .main {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    grid-template-rows: auto auto auto;
+    gap: 12px;
+    padding: 12px;
+  }
+  .board-section { grid-column: 1; grid-row: 1; }
+  .right-rail    { grid-column: 2; grid-row: 1 / 4; display: flex; flex-direction: column; gap: 12px; }
+  .log-section   { grid-column: 1; grid-row: 2; }
+  .bottom-row    { grid-column: 1; grid-row: 3; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  @media (max-width: 1000px) {
+    .main { grid-template-columns: 1fr; }
+    .right-rail { grid-column: 1; grid-row: auto; flex-direction: row; flex-wrap: wrap; }
+    .right-rail .panel { flex: 1 1 280px; }
+    .bottom-row { grid-template-columns: 1fr; }
+  }
+
+  /* ── Generic panel chrome ─────────────────────────────────────────── */
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .panel-header {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+  .panel-header .count {
+    background: var(--panel-2);
+    color: var(--text-dim);
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .panel-header .right {
+    margin-left: auto;
+    color: var(--text-faint);
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: normal;
+  }
+
+  /* ── Board: 7 columns, compact cards ──────────────────────────────── */
+  .board {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 8px;
+    padding: 10px;
+  }
+  .col {
+    background: var(--panel-2);
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    min-height: 200px;
+  }
+  .col-header {
+    padding: 6px 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border-bottom: 1px solid var(--border);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+  }
+  .col-header .accent { width: 3px; height: 12px; border-radius: 2px; }
+  .col-header .name { flex: 1; color: var(--text); }
+  .col-header .count {
+    background: var(--bg);
+    color: var(--text-dim);
+    padding: 0 5px;
+    border-radius: 8px;
+    font-size: 10px;
+  }
+  .col-body {
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 0;
+  }
+  /* Only Todo scrolls */
+  .col.scroll .col-body {
+    overflow-y: auto;
+    max-height: 360px;
+  }
+
+  /* ── Compact card (board) ─────────────────────────────────────────── */
+  .card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    transition: border-color 0.08s ease;
+  }
+  .card:hover { border-color: var(--col-todo); }
+
+  .card-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .card-row .avatar {
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--panel);
+    flex-shrink: 0;
+  }
+  .card-row .title {
+    font-size: 12px;
+    color: var(--text);
+    font-weight: 500;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .card-row .sens {
+    color: var(--col-blocked);
+    font-size: 10px;
+  }
+
+  .card-meta {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    color: var(--text-faint);
+    font-size: 10px;
+  }
+  .plan-pill {
+    color: #0d1117;
+    padding: 0 5px;
+    border-radius: 3px;
+    font-weight: 700;
+    font-size: 9px;
+    letter-spacing: 0.02em;
+  }
+  .plan-pill.p3 { background: var(--plan-3); }
+  .plan-pill.p5 { background: var(--plan-5); }
+  .plan-pill.p7 { background: var(--plan-7); }
+  .card-meta .pr { color: var(--col-todo); font-weight: 500; }
+  .card-meta .badge {
+    background: rgba(210, 153, 34, 0.15);
+    color: #d29922;
+    padding: 0 5px;
+    border-radius: 3px;
+    font-weight: 600;
+    font-size: 10px;
+  }
+  .card-meta .badge.iter { background: rgba(219, 97, 162, 0.15); color: var(--col-review); }
+  .card-meta .badge.block { background: rgba(248, 81, 73, 0.15); color: var(--col-blocked); }
+  .card-meta .cost {
+    background: rgba(63, 185, 80, 0.12);
+    color: var(--col-done);
+    padding: 0 5px;
+    border-radius: 3px;
+    font-weight: 600;
+    font-size: 10px;
+    margin-left: auto;
+  }
+
+  .card-joke {
+    color: var(--text-faint);
+    font-style: italic;
+    font-size: 10px;
+    padding: 2px 6px;
+    background: rgba(248, 81, 73, 0.06);
+    border-left: 2px solid var(--col-blocked);
+    border-radius: 0 3px 3px 0;
+  }
+  .card-joke::before { content: "🤖 "; font-style: normal; }
+
+  .card.done { opacity: 0.78; }
+  .card.done .title { color: var(--text-dim); }
+
+  /* ── Right rail panels ───────────────────────────────────────────── */
+  .worker {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+  }
+  .worker:last-child { border-bottom: none; }
+  .worker .avatar { width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0; background: var(--bg); }
+  .worker .info { flex: 1; min-width: 0; font-size: 12px; }
+  .worker .info .name { color: var(--text); font-weight: 600; }
+  .worker .info .task { color: var(--text-dim); font-size: 11px; margin-top: 1px; }
+  .worker .info .meta { color: var(--text-faint); font-size: 10px; margin-top: 3px; font-family: ui-monospace, Menlo, monospace; }
+  .worker .info .last-log {
+    color: var(--text-faint);
+    font-size: 10px;
+    margin-top: 4px;
+    font-family: ui-monospace, Menlo, monospace;
+    padding: 3px 6px;
+    background: var(--bg);
+    border-radius: 3px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .worker .info .last-log::before { content: "> "; color: var(--text-faint); }
+
+  /* Plan status */
+  .plan-status { padding: 12px; }
+  .plan-status .slug { font-weight: 600; color: var(--text); margin-bottom: 8px; }
+  .plan-status .bar {
+    height: 6px;
+    background: var(--bg);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 10px;
+  }
+  .plan-status .bar > span {
+    display: block;
+    height: 100%;
+    background: var(--col-done);
+  }
+  .plan-status .stats { font-size: 11px; }
+  .plan-status .stat {
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 0;
+  }
+  .plan-status .stat .label { color: var(--text-dim); }
+  .plan-status .stat .num { color: var(--text); font-weight: 600; }
+  .plan-status .stat .num.merged { color: var(--col-done); }
+  .plan-status .stat .num.running { color: var(--col-progress); }
+  .plan-status .stat .num.blocked { color: var(--col-blocked); }
+
+  /* Cost panel */
+  .cost-panel { padding: 12px; }
+  .cost-panel .big {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--col-done);
+    margin-bottom: 8px;
+  }
+  .cost-panel .breakdown { font-size: 11px; }
+  .cost-panel .breakdown .row {
+    display: flex; justify-content: space-between;
+    padding: 2px 0;
+    color: var(--text-dim);
+  }
+  .cost-panel .breakdown .row .v { color: var(--text); }
+  .cost-panel .trend {
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  /* ── Live log panel ──────────────────────────────────────────────── */
+  .log {
+    padding: 8px 12px;
+    height: 240px;
+    overflow-y: auto;
+    font-family: ui-monospace, Menlo, "Cascadia Code", monospace;
+    font-size: 11px;
+    line-height: 1.55;
+  }
+  .log .line { color: var(--text-dim); white-space: pre; }
+  .log .ts { color: var(--text-faint); margin-right: 8px; }
+  .log .tick { color: var(--col-todo); font-weight: 600; }
+  .log .phase { color: var(--col-rfr); }
+  .log .warn { color: #d29922; }
+  .log .err  { color: var(--col-blocked); }
+  .log .ok   { color: var(--col-done); }
+
+  /* ── Activity stream ─────────────────────────────────────────────── */
+  .activity {
+    padding: 8px 0;
+    max-height: 280px;
+    overflow-y: auto;
+  }
+  .activity .ev {
+    padding: 6px 12px;
+    display: flex;
+    gap: 10px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+  }
+  .activity .ev:last-child { border-bottom: none; }
+  .activity .ev .ts { color: var(--text-faint); font-family: ui-monospace, Menlo, monospace; flex-shrink: 0; }
+  .activity .ev .body { flex: 1; }
+  .activity .ev .kind {
+    color: var(--text);
+    font-weight: 600;
+    font-size: 11px;
+  }
+  .activity .ev .kind.merged { color: var(--col-done); }
+  .activity .ev .kind.review { color: var(--col-review); }
+  .activity .ev .kind.blocked { color: var(--col-blocked); }
+  .activity .ev .detail {
+    color: var(--text-dim);
+    font-size: 11px;
+    margin-top: 2px;
+  }
+
+  /* ── GitHub panel ────────────────────────────────────────────────── */
+  .gh { padding: 6px 0; }
+  .gh-section { padding: 4px 12px; }
+  .gh-section .title {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+    font-weight: 600;
+  }
+  .gh .row {
+    padding: 4px 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .gh .row:hover { background: var(--panel-2); cursor: pointer; }
+  .gh .row .num { color: var(--col-todo); font-weight: 500; width: 40px; flex-shrink: 0; }
+  .gh .row .t { color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .gh .row .ci.ok { color: var(--col-done); }
+  .gh .row .ci.fail { color: var(--col-blocked); }
+  .gh .row .ci.pending { color: var(--col-progress); }
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <h1>🛰 <span class="accent">Mission Centre</span></h1>
+  <div class="tabs">
+    <a class="tab" href="#">Dashboard (legacy)</a>
+    <a class="tab active" href="#">Mission Centre</a>
+  </div>
+  <div class="meta">
+    <span><span class="dot"></span>live · refresh 5s</span>
+    <span>tick #1,247</span>
+    <span>plan: PLAN-05</span>
+    <span>auto: <strong>on</strong></span>
+  </div>
+</div>
+
+<!-- Alerts strip: shown only when something needs attention -->
+<div class="alerts">
+  <div class="a err">❗ T0 blocked (sensitive)</div>
+  <div class="a err">❗ T9 worker_failed_3x</div>
+  <div class="a warn">⚠ H1 monitor finding · PR #142 stuck 18h</div>
+</div>
+
+<div class="main">
+
+  <!-- ═══ BOARD SECTION ═══ -->
+  <div class="board-section panel">
+    <div class="panel-header">
+      <span>Task Board</span>
+      <span class="count">14</span>
+      <span class="right">PLAN-05-aws-deploy-support · 6 tasks · PLAN-03-receipts · 8 tasks</span>
+    </div>
+    <div class="board">
+
+      <!-- BACKLOG -->
+      <div class="col">
+        <div class="col-header">
+          <span class="accent" style="background: var(--col-backlog);"></span>
+          <span class="name">Backlog</span>
+          <span class="count">2</span>
+        </div>
+        <div class="col-body">
+
+          <div class="card" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/issues/14','_blank')">
+            <div class="card-row">
+              <span style="font-size:14px;">📌</span>
+              <span class="title">H1: PR #142 stuck >24h</span>
+            </div>
+            <div class="card-meta">
+              <span>monitor</span>
+              <span>· 18h</span>
+            </div>
+          </div>
+
+          <div class="card" onclick="window.open('#','_blank')">
+            <div class="card-row">
+              <span style="font-size:14px;">⏸</span>
+              <span class="title">PLAN-07 waiting on PLAN-06</span>
+            </div>
+            <div class="card-meta">
+              <span class="plan-pill p7">P-07</span>
+              <span>archived 2d</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- TODO (the only scrolling column) -->
+      <div class="col scroll">
+        <div class="col-header">
+          <span class="accent" style="background: var(--col-todo);"></span>
+          <span class="name">Todo</span>
+          <span class="count">7</span>
+        </div>
+        <div class="col-body">
+
+          <div class="card" onclick="window.open('#','_blank')">
+            <div class="card-row">
+              <span class="title">Deploy receipt-sender stack via CDK</span>
+            </div>
+            <div class="card-meta">
+              <span class="plan-pill p5">P-05</span>
+              <span>T4</span>
+              <span>· deps T2,T3</span>
+            </div>
+          </div>
+
+          <div class="card" onclick="window.open('#','_blank')">
+            <div class="card-row">
+              <span class="title">Migrate auth middleware to JWT v2</span>
+              <span class="sens">🛡</span>
+            </div>
+            <div class="card-meta">
+              <span class="plan-pill p5">P-05</span>
+              <span>T5</span>
+              <span>· deps T4</span>
+            </div>
+          </div>
+
+          <div class="card" onclick="window.open('#','_blank')">
+            <div class="card-row">
+              <span class="title">Add Bedrock model access check to preflight</span>
+            </div>
+            <div class="card-meta">
+              <span class="plan-pill p5">P-05</span>
+              <span>T6</span>
+              <span>· deps T1</span>
+            </div>
+          </div>
+
+          <div class="card" onclick="window.open('#','_blank')">
+            <div class="card-row">
+              <span class="title">Add E2E test for full receipt flow</span>
+            </div>
+            <div class="card-meta">
+              <span class="plan-pill p3">P-03</span>
+              <span>T10</span>
+              <span>· deps T7,T8</span>
+            </div>
+          </div>
+
+          <div class="card" onclick="window.open('#','_blank')">
+            <div class="card-row">
+              <span class="title">Wire metrics for payment latency p95</span>
+            </div>
+            <div class="card-meta">
+              <span class="plan-pill p3">P-03</span>
+              <span>T11</span>
+              <span>· deps T10</span>
+            </div>
+          </div>
+
+          <div class="card" onclick="window.open('#','_blank')">
+            <div class="card-row">
+              <span class="title">Backfill receipts table for last 30 days</span>
+              <span class="sens">🛡</span>
+            </div>
+            <div class="card-meta">
+              <span class="plan-pill p3">P-03</span>
+              <span>T12</span>
+              <span>· deps T11</span>
+            </div>
+          </div>
+
+          <div class="card" onclick="window.open('#','_blank')">
+            <div class="card-row">
+              <span class="title">Sunset legacy payment-v1 webhook</span>
+            </div>
+            <div class="card-meta">
+              <span class="plan-pill p3">P-03</span>
+              <span>T13</span>
+              <span>· deps T12</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- IN PROGRESS -->
+      <div class="col">
+        <div class="col-header">
+          <span class="accent" style="background: var(--col-progress);"></span>
+          <span class="name">In Progress</span>
+          <span class="count">2</span>
+        </div>
+        <div class="col-body">
+
+          <div class="card" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/issues/41','_blank')">
+            <div class="card-row">
+              <img class="avatar" src="https://api.dicebear.com/8.x/bottts/svg?seed=Pip&backgroundType=gradientLinear" alt="">
+              <span class="title">Add receipt-sender Lambda</span>
+            </div>
+            <div class="card-meta">
+              <span class="plan-pill p5">P-05</span>
+              <span>T2</span>
+              <span class="badge">14m</span>
+            </div>
+          </div>
+
+          <div class="card" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/issues/42','_blank')">
+            <div class="card-row">
+              <img class="avatar" src="https://api.dicebear.com/8.x/bottts/svg?seed=Bento&backgroundType=gradientLinear" alt="">
+              <span class="title">Wire receipt-sender into checkout flow</span>
+            </div>
+            <div class="card-meta">
+              <span class="plan-pill p5">P-05</span>
+              <span>T3</span>
+              <span class="badge">3m</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- READY FOR REVIEW -->
+      <div class="col">
+        <div class="col-header">
+          <span class="accent" style="background: var(--col-rfr);"></span>
+          <span class="name">Ready</span>
+          <span class="count">1</span>
+        </div>
+        <div class="col-body">
+
+          <div class="card" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/pull/143','_blank')">
+            <div class="card-row">
+              <img class="avatar" src="https://api.dicebear.com/8.x/bottts/svg?seed=Nova&backgroundType=gradientLinear" alt="">
+              <span class="title">Add receipt template module</span>
+            </div>
+            <div class="card-meta">
+              <span class="plan-pill p5">P-05</span>
+              <span class="pr">#143</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- IN REVIEW -->
+      <div class="col">
+        <div class="col-header">
+          <span class="accent" style="background: var(--col-review);"></span>
+          <span class="name">In Review</span>
+          <span class="count">2</span>
+        </div>
+        <div class="col-body">
+
+          <div class="card" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/pull/144','_blank')">
+            <div class="card-row">
+              <img class="avatar" src="https://api.dicebear.com/8.x/bottts/svg?seed=Argus&backgroundColor=db61a2" alt="">
+              <span class="title">Add input validation to checkout</span>
+            </div>
+            <div class="card-meta">
+              <span class="plan-pill p3">P-03</span>
+              <span class="pr">#144</span>
+              <span class="badge">2 blockers</span>
+            </div>
+          </div>
+
+          <div class="card" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/pull/145','_blank')">
+            <div class="card-row">
+              <img class="avatar" src="https://api.dicebear.com/8.x/bottts/svg?seed=Echo&backgroundType=gradientLinear" alt="">
+              <span class="title">Refactor session-token storage</span>
+            </div>
+            <div class="card-meta">
+              <span class="plan-pill p3">P-03</span>
+              <span class="pr">#145</span>
+              <span class="badge iter">iter r2/5</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- BLOCKED -->
+      <div class="col">
+        <div class="col-header">
+          <span class="accent" style="background: var(--col-blocked);"></span>
+          <span class="name">Blocked</span>
+          <span class="count">2</span>
+        </div>
+        <div class="col-body">
+
+          <div class="card" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/pull/142','_blank')">
+            <div class="card-row">
+              <img class="avatar" src="https://api.dicebear.com/8.x/bottts/svg?seed=Glitch&backgroundType=gradientLinear" alt="">
+              <span class="title">IAM role for cross-account Bedrock</span>
+              <span class="sens">🛡</span>
+            </div>
+            <div class="card-meta">
+              <span class="plan-pill p5">P-05</span>
+              <span class="pr">#142</span>
+              <span class="badge block">needs-robbie</span>
+            </div>
+            <div class="card-joke">404: human-in-the-loop not found.</div>
+          </div>
+
+          <div class="card" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/pull/146','_blank')">
+            <div class="card-row">
+              <img class="avatar" src="https://api.dicebear.com/8.x/bottts/svg?seed=Bug&backgroundType=gradientLinear" alt="">
+              <span class="title">Wire OAuth callback to new auth</span>
+            </div>
+            <div class="card-meta">
+              <span class="plan-pill p3">P-03</span>
+              <span class="pr">#146</span>
+              <span class="badge block">failed 3x</span>
+            </div>
+            <div class="card-joke">I tried. Brain too small. Send human.</div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- DONE -->
+      <div class="col">
+        <div class="col-header">
+          <span class="accent" style="background: var(--col-done);"></span>
+          <span class="name">Done</span>
+          <span class="count">3</span>
+        </div>
+        <div class="col-body">
+
+          <div class="card done" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/pull/140','_blank')">
+            <div class="card-row">
+              <img class="avatar" src="https://api.dicebear.com/8.x/bottts/svg?seed=Mochi&backgroundType=gradientLinear" alt="">
+              <span class="title">Bootstrap CDK app skeleton</span>
+            </div>
+            <div class="card-meta">
+              <span class="plan-pill p5">P-05</span>
+              <span class="pr">#140</span>
+              <span class="cost">$0.31</span>
+            </div>
+          </div>
+
+          <div class="card done" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/pull/138','_blank')">
+            <div class="card-row">
+              <img class="avatar" src="https://api.dicebear.com/8.x/bottts/svg?seed=Cosmo&backgroundType=gradientLinear" alt="">
+              <span class="title">Add structured logging to payment</span>
+            </div>
+            <div class="card-meta">
+              <span class="plan-pill p3">P-03</span>
+              <span class="pr">#138</span>
+              <span class="cost">$1.04</span>
+            </div>
+          </div>
+
+          <div class="card done" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/pull/135','_blank')">
+            <div class="card-row">
+              <img class="avatar" src="https://api.dicebear.com/8.x/bottts/svg?seed=Pixel&backgroundType=gradientLinear" alt="">
+              <span class="title">Migrate config loader to pydantic v2</span>
+            </div>
+            <div class="card-meta">
+              <span class="plan-pill p3">P-03</span>
+              <span class="pr">#135</span>
+              <span class="cost">$0.72</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ═══ LIVE LOG ═══ -->
+  <div class="log-section panel">
+    <div class="panel-header">
+      <span>Live Log</span>
+      <span class="right">.claude/state/orchestrator.log · auto-scroll</span>
+    </div>
+    <div class="log">
+<div class="line"><span class="ts">10:31:42</span><span class="tick">=== tick 2026-05-26T10:31:42Z ===</span></div>
+<div class="line"><span class="ts">10:31:42</span><span class="phase">--- phase 0: lock + state file lookup ---</span></div>
+<div class="line"><span class="ts">10:31:43</span><span class="phase">--- phase 1: refresh-deps ---</span></div>
+<div class="line"><span class="ts">10:31:43</span>  task 4: deps met, labelling issue #44</div>
+<div class="line"><span class="ts">10:31:44</span><span class="phase">--- phase 2: sweep-merges ---</span></div>
+<div class="line"><span class="ts">10:31:44</span>  task 1: PR #143 OPEN, no transition</div>
+<div class="line"><span class="ts">10:31:44</span><span class="phase">--- phase 3: review-pass ---</span></div>
+<div class="line"><span class="ts">10:31:44</span>  PR #144: CI green, review-sha != HEAD <span class="ok">→ spawning review-pr (Argus)</span></div>
+<div class="line"><span class="ts">10:31:45</span><span class="phase">--- phase 4: iterate-pass ---</span></div>
+<div class="line"><span class="ts">10:31:45</span>  PR #145: review-blocked, sha matches <span class="ok">→ spawning iterate-pr (Echo r2/5)</span></div>
+<div class="line"><span class="ts">10:31:46</span><span class="phase">--- phase 5: launch-pass (slots=2) ---</span></div>
+<div class="line"><span class="ts">10:31:46</span>  task 2: launching worker (Pip) <span class="ok">→ wt-plan05-t2/</span></div>
+<div class="line"><span class="ts">10:31:47</span>  task 3: launching worker (Bento) <span class="ok">→ wt-plan05-t3/</span></div>
+<div class="line"><span class="ts">10:31:48</span><span class="phase">--- phase 6: plan-status (dashboard refresh) ---</span></div>
+<div class="line"><span class="ts">10:31:48</span><span class="phase">--- phase 7: monitor sweep ---</span></div>
+<div class="line"><span class="ts">10:31:48</span>  monitor-sweep: done — findings=0, deduped=0, fired=0</div>
+<div class="line"><span class="ts">10:31:48</span>tick done</div>
+<div class="line"><span class="ts">10:36:42</span><span class="tick">=== tick 2026-05-26T10:36:42Z ===</span></div>
+<div class="line"><span class="ts">10:36:43</span>  task 2 (Pip): tests_run="pytest tests/" tests_result=pass</div>
+<div class="line"><span class="ts">10:36:43</span>  task 2: pushed claude/plan05-task2 <span class="ok">→ PR #147</span></div>
+<div class="line"><span class="ts">10:36:44</span>  task 2: status in_review, pr=147</div>
+<div class="line"><span class="ts">10:36:44</span>  <span class="warn">warning: H1 heuristic fired for PR #142 (>24h stuck)</span></div>
+<div class="line"><span class="ts">10:36:45</span>tick done</div>
+    </div>
+  </div>
+
+  <!-- ═══ BOTTOM ROW: Activity + GitHub ═══ -->
+  <div class="bottom-row">
+
+    <div class="panel">
+      <div class="panel-header">
+        <span>Recent Activity</span>
+        <span class="right">events.jsonl · last 20</span>
+      </div>
+      <div class="activity">
+        <div class="ev">
+          <span class="ts">10:36:44</span>
+          <div class="body">
+            <div class="kind review">task_in_review</div>
+            <div class="detail">T2 (Pip) → PR #147 · auto_merge:true</div>
+          </div>
+        </div>
+        <div class="ev">
+          <span class="ts">10:31:48</span>
+          <div class="body">
+            <div class="kind">tick_done</div>
+            <div class="detail">14 tasks · pending:7 in_progress:2 in_review:3 blocked:2 merged:3</div>
+          </div>
+        </div>
+        <div class="ev">
+          <span class="ts">10:31:47</span>
+          <div class="body">
+            <div class="kind review">review</div>
+            <div class="detail">PR #145 (Echo) · changes_requested · iter 2/5 · sha c689dae</div>
+          </div>
+        </div>
+        <div class="ev">
+          <span class="ts">10:15:03</span>
+          <div class="body">
+            <div class="kind merged">task_merged</div>
+            <div class="detail">T0a (Mochi) → PR #140 · cost $0.31</div>
+          </div>
+        </div>
+        <div class="ev">
+          <span class="ts">09:48:21</span>
+          <div class="body">
+            <div class="kind blocked">task_blocked</div>
+            <div class="detail">T9 (Bug) · reason: worker_failed_3x</div>
+          </div>
+        </div>
+        <div class="ev">
+          <span class="ts">09:12:07</span>
+          <div class="body">
+            <div class="kind merged">task_merged</div>
+            <div class="detail">T6 (Cosmo) → PR #138 · cost $1.04</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <span>GitHub</span>
+        <span class="right">gh · 30s cache</span>
+      </div>
+      <div class="gh">
+        <div class="gh-section">
+          <div class="title">Issues (3 open)</div>
+        </div>
+        <div class="row">
+          <span class="num">#14</span><span class="t">H1: PR #142 stuck >24h</span><span class="ci pending">⚠</span>
+        </div>
+        <div class="row">
+          <span class="num">#41</span><span class="t">PLAN-05 T2: Add receipt-sender Lambda</span>
+        </div>
+        <div class="row">
+          <span class="num">#42</span><span class="t">PLAN-05 T3: Wire receipt-sender into checkout</span>
+        </div>
+
+        <div class="gh-section" style="margin-top:8px;">
+          <div class="title">PRs (4 open)</div>
+        </div>
+        <div class="row">
+          <span class="num">#147</span><span class="t">Add receipt-sender Lambda</span><span class="ci pending">◐</span>
+        </div>
+        <div class="row">
+          <span class="num">#143</span><span class="t">Add receipt template module</span><span class="ci ok">●</span>
+        </div>
+        <div class="row">
+          <span class="num">#144</span><span class="t">Add input validation to checkout</span><span class="ci ok">●</span>
+        </div>
+        <div class="row">
+          <span class="num">#145</span><span class="t">Refactor session-token storage</span><span class="ci fail">●</span>
+        </div>
+        <div class="row">
+          <span class="num">#142</span><span class="t">IAM role for cross-account Bedrock</span><span class="ci ok">●</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══ RIGHT RAIL ═══ -->
+  <div class="right-rail">
+
+    <!-- Active Workers -->
+    <div class="panel">
+      <div class="panel-header">
+        <span>Active Workers</span>
+        <span class="count">3</span>
+      </div>
+
+      <div class="worker">
+        <img class="avatar" src="https://api.dicebear.com/8.x/bottts/svg?seed=Pip&backgroundType=gradientLinear" alt="">
+        <div class="info">
+          <div class="name">Pip</div>
+          <div class="task">T2 · PLAN-05 · Add receipt-sender Lambda</div>
+          <div class="meta">worker · pid 41832 · 14m elapsed · wt-plan05-t2/</div>
+          <div class="last-log">tests_run="pytest" → 12 passed</div>
+        </div>
+      </div>
+
+      <div class="worker">
+        <img class="avatar" src="https://api.dicebear.com/8.x/bottts/svg?seed=Bento&backgroundType=gradientLinear" alt="">
+        <div class="info">
+          <div class="name">Bento</div>
+          <div class="task">T3 · PLAN-05 · Wire checkout flow</div>
+          <div class="meta">worker · pid 41980 · 3m elapsed · wt-plan05-t3/</div>
+          <div class="last-log">editing src/checkout/handler.py</div>
+        </div>
+      </div>
+
+      <div class="worker">
+        <img class="avatar" src="https://api.dicebear.com/8.x/bottts/svg?seed=Echo&backgroundType=gradientLinear" alt="">
+        <div class="info">
+          <div class="name">Echo</div>
+          <div class="task">T8 · PLAN-03 · Refactor session-token</div>
+          <div class="meta">iterator · pid 42115 · r2/5 · PR #145</div>
+          <div class="last-log">addressing reviewer comment #3</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Plan Status -->
+    <div class="panel">
+      <div class="panel-header">
+        <span>Plan Status</span>
+        <span class="right">PLAN-05</span>
+      </div>
+      <div class="plan-status">
+        <div class="slug">PLAN-05-aws-deploy-support</div>
+        <div class="bar"><span style="width: 50%"></span></div>
+        <div style="font-size: 11px; color: var(--text-faint); margin-bottom: 10px;">3 of 6 merged · 50% complete</div>
+        <div class="stats">
+          <div class="stat"><span class="label">✓ merged</span><span class="num merged">3</span></div>
+          <div class="stat"><span class="label">▶ in progress</span><span class="num running">2</span></div>
+          <div class="stat"><span class="label">◯ pending</span><span class="num">1</span></div>
+          <div class="stat"><span class="label">⚠ blocked</span><span class="num blocked">0</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cost -->
+    <div class="panel">
+      <div class="panel-header">
+        <span>Cost (today)</span>
+      </div>
+      <div class="cost-panel">
+        <div class="big">$2.18</div>
+        <div class="breakdown">
+          <div class="row"><span>workers</span><span class="v">$1.42</span></div>
+          <div class="row"><span>reviewer (Argus)</span><span class="v">$0.62</span></div>
+          <div class="row"><span>iterator</span><span class="v">$0.14</span></div>
+        </div>
+        <div class="trend">↑ 23% vs yesterday · $3.71 this week</div>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+</body>
+</html>
