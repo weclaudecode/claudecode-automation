@@ -34,8 +34,8 @@ cd "$REPO"
 # the tick header, so misconfig is visible without aborting the tick.
 for _orch_cfg in .envrc .claude/orchestrator.env; do
   if [ -f "$_orch_cfg" ]; then
-    # shellcheck source=/dev/null
     set +u
+    # shellcheck source=/dev/null
     source "$_orch_cfg" 2>/dev/null || true
     set -u
   fi
