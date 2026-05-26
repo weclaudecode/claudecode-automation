@@ -133,6 +133,17 @@ run_heuristic "$SCRIPTS_DIR/_heuristics/h1_stuck_needs_robbie.sh" \
   "$FIXTURES_DIR/h1_negative.json"
 assert_no_finding "H1-PR99"
 
+# Regression: sensitive-flagged task (auto_merge_overrides[N] == false) must
+# NOT fire H1, because the orch:needs-robbie label is intentional there.
+# Pre-fix, `jq // "missing"` swallowed the literal `false` and the skip-check
+# fell through. Same bug class as PR #40 (retry-auto-merge.sh). A failing
+# assertion here means the `has + tostring` guard regressed.
+echo "--- h1_stuck_needs_robbie sensitive-skip ---"
+run_heuristic "$SCRIPTS_DIR/_heuristics/h1_stuck_needs_robbie.sh" \
+  "$FIXTURES_DIR/h1_sensitive_skip.json"
+assert_no_finding "H1-PR99"
+FIXTURE_TESTS_RUN=$((FIXTURE_TESTS_RUN + 1))
+
 # ── H2: silent worker-failed-3x detector ──
 # Tested explicitly because the fixture prefix ("h2") differs from the heuristic
 # filename ("h2_silent_block"), and because $DECISIONS_FILE must be pointed at
