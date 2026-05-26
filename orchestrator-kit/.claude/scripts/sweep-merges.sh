@@ -99,6 +99,9 @@ while read -r task_num pr_num issue_num; do
       echo "task $task_num: PR #$pr_num MERGED -> marking task merged"
       if update_state "$task_num" '.tasks[$t].status = "merged" | .tasks[$t].merged_at = (now | todateiso8601)'; then
         MERGED_COUNT=$((MERGED_COUNT + 1))
+        emit_event task_merged "$(jq -cn \
+          --arg plan "$PLAN_NUM" --argjson task "$task_num" --argjson pr "$pr_num" \
+          '{plan: $plan, task: $task, pr: $pr}' 2>/dev/null || echo '{}')"
         if [ "$issue_num" != "null" ] && [ -n "$issue_num" ]; then
           gh issue close "$issue_num" --repo "$REPO" --reason completed \
             --comment "Auto-closed by orchestrator after PR #$pr_num merged." >/dev/null 2>&1 \
@@ -123,6 +126,9 @@ while read -r task_num pr_num issue_num; do
       echo "task $task_num: PR #$pr_num CLOSED unmerged -> marking task blocked"
       if update_state "$task_num" '.tasks[$t].status = "blocked" | .tasks[$t].blocked_at = (now | todateiso8601) | .tasks[$t].blocked_reason = "pr_closed_unmerged"'; then
         BLOCKED_COUNT=$((BLOCKED_COUNT + 1))
+        emit_event task_blocked "$(jq -cn \
+          --arg plan "$PLAN_NUM" --argjson task "$task_num" --argjson pr "$pr_num" --arg reason "pr_closed_unmerged" \
+          '{plan: $plan, task: $task, pr: $pr, reason: $reason}' 2>/dev/null || echo '{}')"
         # 5.7b: cascade-block transitive pending dependents so the plan can
         # archive instead of looping on tasks whose dep will never close.
         cascade_block "$STATE_FILE" "$task_num" || true

@@ -37,7 +37,14 @@ while IFS= read -r _h1_entry; do
   _h1_pr=$(jq -r '.value.pr' <<< "$_h1_entry")
 
   # Skip if task is in auto_merge_overrides — orch:needs-robbie is intentional there.
-  _h1_override=$(jq -r --arg n "$_h1_task_num" '.auto_merge_overrides[$n] // "missing"' "$STATE_FILE")
+  # jq `//` returns RHS for both null AND false, so a literal `false` (the
+  # exact value that marks the task human-only) would collapse to "missing"
+  # and the skip-check would fall through, firing the heuristic on every
+  # legitimately-pending sensitive PR. Use `has` + `tostring` to distinguish
+  # "key absent" from "key present, value false". Same bug class as PR #40.
+  _h1_override=$(jq -r --arg n "$_h1_task_num" \
+    '(.auto_merge_overrides // {}) | if has($n) then .[$n] | tostring else "missing" end' \
+    "$STATE_FILE")
   [ "$_h1_override" != "false" ] || continue
 
   # Resolve PR data — use _test_pr_fixtures when present (offline test stub).

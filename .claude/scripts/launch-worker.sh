@@ -139,6 +139,17 @@ if [ -z "$TASK_CONTENT" ]; then
   exit 1
 fi
 
+# Surface structured acceptance criteria (if the task declared any) as an
+# explicit numbered block, rather than relying on the worker to notice the
+# `**acceptance:**` line buried in the verbatim spec. Empty when absent.
+ACCEPTANCE_BLOCK=$(jq -r --arg t "$TASK_NUM" '
+  (.tasks[$t].acceptance // [])
+  | if length > 0
+    then "### Acceptance criteria (every item MUST hold before you report complete)\n\n"
+         + ([ to_entries[] | "\(.key + 1). \(.value)" ] | join("\n"))
+    else "" end
+' "$STATE_FILE" 2>/dev/null || echo "")
+
 # Propagate AWS env vars when the plan's state has an aws_env block.
 # Uses an explicit non-empty check rather than jq // so a missing key
 # (null) is correctly treated as "absent" without side-effects.
@@ -183,7 +194,9 @@ end with the message specified in the task.
 
 ### Task ${TASK_NUM} (verbatim from plan)
 
-${TASK_CONTENT}"
+${TASK_CONTENT}
+
+${ACCEPTANCE_BLOCK}"
 
 # Build invocation as array so the timeout prefix is optional without
 # duplicating the claude command. Exit 124 from `timeout` means the worker
@@ -312,6 +325,10 @@ if ! update_state ".tasks[\$t].status = \"in_review\" | .tasks[\$t].pr = $PR_NUM
   unregister_worktree "$WT"
   exit 1
 fi
+
+emit_event task_in_review "$(jq -cn \
+  --arg plan "$PLAN_NUM" --argjson task "$TASK_NUM" --argjson pr "$PR_NUM" --arg auto_merge "$AUTO_MERGE" \
+  '{plan: $plan, task: $task, pr: $pr, auto_merge: ($auto_merge == "true")}' 2>/dev/null || echo '{}')"
 
 if [ "$AUTO_MERGE" = "true" ]; then
   if gh pr merge "$PR_NUM" --auto --squash --delete-branch 2>&1; then

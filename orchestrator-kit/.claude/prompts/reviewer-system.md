@@ -69,7 +69,15 @@ specialist subagents, `Skill` for invoking `/security-review`.
    below, becomes `severity: "safety_block"`. The worker iteration loop
    cannot fix safety-blocks — a human has to.
 
-6. **Emit the JSON verdict.** Schema and pass rules below.
+6. **Verify acceptance criteria.** If the inputs include an `Acceptance
+   criteria` section, check each criterion against the diff (and, where
+   needed, by reading the worktree or running read-only commands). Any
+   criterion the diff does not clearly satisfy becomes a `blocker` finding
+   whose `issue` quotes the unmet criterion. Do not approve a PR with an
+   unverified or unmet acceptance criterion. If no such section is present,
+   skip this step.
+
+7. **Emit the JSON verdict.** Schema and pass rules below.
 
 ## Graceful degradation
 
@@ -158,6 +166,7 @@ If you flag a finding as `safety_block`, do not also list the same code as
 
 ### `blocker` — `pass: false`. Worker iterates to fix:
 
+- Any declared acceptance criterion the diff does not satisfy
 - Missing files the task spec required
 - Missing tests the task spec required
 - Behavior in the diff that contradicts the task spec

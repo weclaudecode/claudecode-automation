@@ -25,6 +25,23 @@ set -uo pipefail
 REPO=$(git rev-parse --show-toplevel)
 cd "$REPO"
 
+# Source operator config if present (.envrc, .claude/orchestrator.env).
+# Why: Claude Code's Bash tool spawns non-interactive subshells, so
+# direnv-style .envrc exports never reach this script otherwise — the
+# orchestrator silently falls back to defaults (e.g. ORCH_MAX_PARALLEL=1,
+# ORCH_WORKER_TIMEOUT=600) instead of the operator's chosen values.
+# Sourcing errors are tolerated: the resolved values still appear in
+# the tick header, so misconfig is visible without aborting the tick.
+for _orch_cfg in .envrc .claude/orchestrator.env; do
+  if [ -f "$_orch_cfg" ]; then
+    set +u
+    # shellcheck source=/dev/null
+    source "$_orch_cfg" 2>/dev/null || true
+    set -u
+  fi
+done
+unset _orch_cfg
+
 # shellcheck source=.claude/scripts/_dispatcher_lib.sh
 source "$REPO/.claude/scripts/_dispatcher_lib.sh"
 
@@ -242,6 +259,11 @@ EFFECTIVE_AUTO_RECOMMENDED=$(resolve_auto_recommended "$STATE_FILE")
 
 echo "plan: $PLAN_FILE  env: $TICK_ENV  total: $TOTAL  max_parallel: $MAX_PARALLEL  auto_recommended: $EFFECTIVE_AUTO_RECOMMENDED  repo: $REPO_OWNER_REPO"
 
+emit_event tick_start "$(jq -cn \
+  --arg plan "$PLAN_NUM" --arg env "$TICK_ENV" \
+  --argjson total "${TOTAL:-0}" --argjson max_parallel "${MAX_PARALLEL:-1}" \
+  '{plan: $plan, env: $env, total: $total, max_parallel: $max_parallel}' 2>/dev/null || echo '{}')"
+
 # ---- Pre-flight operator gate (Task 4) ----
 # If the active plan's state contains a pre_flight block, check for the
 # corresponding GitHub issue. Gate exits 2 when the issue is open (no-op
@@ -337,6 +359,11 @@ if [ "$ALL_TERMINAL" = "true" ]; then
 
   echo "plan $PLAN_NUM terminal: $MERGED_COUNT merged, $BLOCKED_COUNT blocked; marking $FINAL_STATUS and archiving"
 
+  emit_event plan_archived "$(jq -cn \
+    --arg plan "$PLAN_NUM" --arg env "$TICK_ENV" --arg status "$FINAL_STATUS" \
+    --argjson merged "${MERGED_COUNT:-0}" --argjson blocked "${BLOCKED_COUNT:-0}" --argjson total "${TOTAL:-0}" \
+    '{plan: $plan, env: $env, status: $status, merged: $merged, blocked: $blocked, total: $total}' 2>/dev/null || echo '{}')"
+
   if state_write "$STATE_FILE" '.status = $s | .completed_at = (now | todateiso8601)' --arg s "$FINAL_STATUS"; then
     mv "$PLAN_FILE" .claude/plans/archive/ 2>/dev/null || \
       echo "warning: could not move plan file to archive (already moved?)" >&2
@@ -361,8 +388,7 @@ fi
 if [ "${ORCH_MONITOR_ENABLED:-1}" = "1" ] && \
    [ -x .claude/scripts/monitor-sweep.sh ]; then
   echo "--- phase 7: monitor sweep ---"
-  STATE_FILE="$STATE_FILE" REPO="$REPO_OWNER_REPO" \
-    bash .claude/scripts/monitor-sweep.sh || \
+  bash .claude/scripts/monitor-sweep.sh "$STATE_FILE" "$REPO_OWNER_REPO" || \
     echo "warning: monitor-sweep exited non-zero (continuing)" >&2
 fi
 
@@ -400,6 +426,19 @@ if [ -x "$DASHBOARD" ]; then
   else
     echo "warning: state file not found at $STATE_FILE or archive/ — skipping dashboard" >&2
   fi
+fi
+
+# tick_done carries a per-status histogram so the event stream is a usable
+# progress timeline on its own. Read from whichever path the state landed at
+# (it moves to archive/ on the tick that completes the plan).
+_done_state="$STATE_FILE"
+[ -f "$_done_state" ] || _done_state=".claude/plans/archive/$(basename "$STATE_FILE")"
+if [ -f "$_done_state" ]; then
+  emit_event tick_done "$(jq -c \
+    --arg plan "$PLAN_NUM" --arg env "$TICK_ENV" \
+    '{plan: $plan, env: $env, status: .status,
+      counts: ([.tasks[].status] | group_by(.) | map({key: .[0], value: length}) | from_entries)}' \
+    "$_done_state" 2>/dev/null || echo "{\"plan\":\"$PLAN_NUM\"}")"
 fi
 
 echo "tick done"

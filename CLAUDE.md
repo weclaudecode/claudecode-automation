@@ -138,6 +138,7 @@ The phase 0 reproduction steps in `orchestrator-kit/docs/FIX-PLAN.md` are the cl
       "title": "...",
       "depends_on": [],                // task numbers this one waits on
       "touches": ["path/**", "..."],   // gitignore-syntax globs
+      "acceptance": ["...", "..."],    // optional: machine-checkable done criteria injected into worker + reviewer
       "issue": 41,                     // null until refresh-deps opens it
       "pr": 142,                       // null until launch-worker pushes
       "status": "pending",             // pending | in_progress | in_review | merged | blocked

@@ -500,6 +500,56 @@ find_timeout_cmd() {
     || true
 }
 
+# ---- emit_event ----
+# Append one JSON line to .claude/state/events.jsonl — a structured,
+# queryable timeline of orchestrator activity that sits alongside the
+# free-text orchestrator.log. Consumers (dashboards, trend reports,
+# external observability) parse this instead of grepping the log.
+#
+# Usage:
+#   emit_event <event_type> [extra_json_object]
+#
+# Example:
+#   emit_event task_merged "$(jq -cn --arg p 05 --argjson task 3 --argjson pr 142 \
+#     '{plan:$p, task:$task, pr:$pr}')"
+#
+# Every line carries at least {ts, event}. The optional second argument is a
+# JSON object merged into the line; pass it pre-built (jq -cn ...) so values
+# keep their types. Best-effort throughout: a missing repo root, unwritable
+# state dir, or malformed extra JSON drops the event and returns 0 rather
+# than failing the caller. Never put emit_event on a critical path.
+#
+# Rotation mirrors orchestrator.log: when the file exceeds
+# ORCH_EVENTS_MAX_BYTES (default 10 MiB) it is renamed with a UTC timestamp.
+emit_event() {
+  local event_type="$1"
+  local extra="${2:-{\}}"
+  command -v jq >/dev/null 2>&1 || return 0
+
+  local repo_root
+  repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
+  local events_file="$repo_root/.claude/state/events.jsonl"
+  mkdir -p "$repo_root/.claude/state" 2>/dev/null || return 0
+
+  local max_bytes="${ORCH_EVENTS_MAX_BYTES:-10485760}"
+  if [ -f "$events_file" ]; then
+    local sz
+    sz=$(wc -c < "$events_file" 2>/dev/null | tr -d ' ' || echo 0)
+    if [ "${sz:-0}" -gt "$max_bytes" ]; then
+      mv "$events_file" "${events_file}.$(date -u +%Y%m%dT%H%M%SZ)" 2>/dev/null || true
+    fi
+  fi
+
+  local line
+  line=$(jq -cn \
+    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg event "$event_type" \
+    --argjson extra "$extra" \
+    '{ts: $ts, event: $event} + $extra' 2>/dev/null) || return 0
+
+  printf '%s\n' "$line" >> "$events_file" 2>/dev/null || return 0
+}
+
 # ---- extract_usage_summary ----
 # Parse a `claude -p --output-format json` run file's terminal "result"
 # message and emit a one-line usage summary. Format:

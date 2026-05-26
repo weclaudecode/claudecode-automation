@@ -75,7 +75,10 @@ while read -r task_num pr_num; do
   # Skip sensitive tasks BEFORE any gh API call to conserve quota.
   # auto_merge_overrides[N] == false means the operator declared this
   # task human-only at ingest time; retrying --auto would defy intent.
-  OVERRIDE=$(jq -r --arg t "$task_num" '.auto_merge_overrides[$t] // "unset"' "$STATE_FILE")
+  # jq `//` returns RHS for both null AND false, so a literal `false`
+  # would be swallowed — use `has` + `tostring` to distinguish unset
+  # from false (incident 2026-05-25: PR #53 auto-merged this way).
+  OVERRIDE=$(jq -r --arg t "$task_num" '(.auto_merge_overrides // {}) | if has($t) then .[$t] | tostring else "unset" end' "$STATE_FILE")
   if [ "$OVERRIDE" = "false" ]; then
     echo "task $task_num: PR #$pr_num skipped (auto_merge_overrides[$task_num] == false)"
     SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
