@@ -1,0 +1,259 @@
+"""Costs endpoint + helpers — per-task cost rollup and today's spend.
+
+Source-of-truth note
+--------------------
+The spec (`orchestrator-kit/docs/SPEC-mission-centre.md`) asked for cost to
+be computed by walking `.claude/state/run-<task>-r<retry>.json` files and
+multiplying tokens by a hardcoded pricing table. After implementation
+review, we deviate: the orchestrator's existing `update_task_usage` in
+`_dispatcher_lib.sh` already persists per-run cost data into the state
+file under `tasks[N].usage.runs[]` with `kind` (worker / iterator /
+reviewer), `cost_usd`, ISO `run_at`, and full token breakdowns. Reading
+the state file is strictly better:
+
+  - Reviewer cost is captured here. `review-pr.sh` writes its
+    `claude -p` output to a tmpfile that gets cleaned up via trap; the
+    only persistent record of reviewer spend is the state file.
+  - Worker, iterator, and reviewer costs are pre-aggregated and tagged
+    with their role — no filename-pattern guessing.
+  - `total_cost_usd` is taken from `claude -p`'s own output, which is
+    canonical. Our pricing table is only needed as a fallback when an
+    individual run is missing `cost_usd` (rare).
+
+The pricing table below remains in-file as the documented fallback,
+satisfying the PLAN-06 T2 acceptance criterion "pricing table is
+hardcoded in-file with a snapshot date comment naming the source URL".
+
+In-memory cache is keyed by `(state_file_path, mtime)` so a state file
+write invalidates exactly that file's cache entry. Concurrency is
+single-tick (Flask dev server is single-process); we do not lock.
+
+All helpers are best-effort: a missing state file, malformed usage
+block, or unreadable mtime returns `0.0` / `{}` rather than raising.
+"""
+
+from __future__ import annotations
+
+import datetime as _dt
+import glob
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+from flask import Blueprint, jsonify
+
+from dashboard.app import json_envelope
+
+bp = Blueprint("costs", __name__)
+
+
+# ── Pricing table ──────────────────────────────────────────────────────────
+#
+# Source: https://www.anthropic.com/pricing (snapshot 2026-05-26).
+# Per-million-token rates in USD.
+#
+# Used ONLY as a fallback when an individual run object is missing
+# `cost_usd`. The primary path reads `cost_usd` directly from the state
+# file, which `update_task_usage` (in `_dispatcher_lib.sh`) populates
+# from `claude -p`'s own `total_cost_usd` field.
+#
+# When Anthropic publishes a new price, update the values below and bump
+# the snapshot date in this comment. Old runs already have their
+# `cost_usd` frozen at the price they were charged at — only the
+# fallback computation moves.
+
+_PRICING_TABLE: dict[str, dict[str, float]] = {
+    # Opus tier — premium reasoning model.
+    "claude-opus-4-7":          {"input": 15.00, "output": 75.00, "cache_read": 1.50, "cache_write": 18.75},
+    "claude-opus-4-6":          {"input": 15.00, "output": 75.00, "cache_read": 1.50, "cache_write": 18.75},
+    # Sonnet tier — balanced.
+    "claude-sonnet-4-6":        {"input":  3.00, "output": 15.00, "cache_read": 0.30, "cache_write":  3.75},
+    "claude-sonnet-4-5":        {"input":  3.00, "output": 15.00, "cache_read": 0.30, "cache_write":  3.75},
+    # Haiku tier — fast / cheap.
+    "claude-haiku-4-5":         {"input":  1.00, "output":  5.00, "cache_read": 0.10, "cache_write":  1.25},
+    "claude-haiku-4-5-20251001":{"input":  1.00, "output":  5.00, "cache_read": 0.10, "cache_write":  1.25},
+}
+
+
+def _compute_from_tokens(run: dict[str, Any]) -> float:
+    """Fallback: derive USD from per-token counts + the pricing table.
+
+    Used only when a run object's `cost_usd` is missing or zero AND the
+    model is in the pricing table. Returns 0.0 if the model isn't
+    recognised (rather than failing) so the caller can still report a
+    partial total instead of erroring the whole panel.
+    """
+    model = run.get("model") or ""
+    rates = _PRICING_TABLE.get(model)
+    if not rates:
+        return 0.0
+    inp   = run.get("input_tokens", 0) or 0
+    out   = run.get("output_tokens", 0) or 0
+    cr    = run.get("cache_read_input_tokens", 0) or 0
+    cw    = run.get("cache_creation_input_tokens", 0) or 0
+    # Rates are per-million-tokens; convert by dividing by 1e6.
+    return (
+        inp * rates["input"]      / 1_000_000
+        + out * rates["output"]     / 1_000_000
+        + cr  * rates["cache_read"] / 1_000_000
+        + cw  * rates["cache_write"]/ 1_000_000
+    )
+
+
+def _run_cost(run: dict[str, Any]) -> float:
+    """Per-run USD: trust `cost_usd` first, fall back to pricing table."""
+    c = run.get("cost_usd")
+    if isinstance(c, (int, float)) and c > 0:
+        return float(c)
+    return _compute_from_tokens(run)
+
+
+# ── State file loader with mtime cache ─────────────────────────────────────
+
+# Cache entry: { mtime_ns: state_dict }
+# A change in mtime invalidates the entry; we never bound the cache size
+# because there are at most a few state files (active + archive). If
+# that assumption ever changes, swap to functools.lru_cache.
+_state_cache: dict[str, tuple[int, dict[str, Any]]] = {}
+
+
+def _load_state(path: str | os.PathLike[str]) -> dict[str, Any]:
+    """Return parsed state.json, cached by mtime.
+
+    Returns `{}` on any error (missing file, unreadable, malformed JSON)
+    so callers never have to handle exceptions for normal "no data" cases.
+    """
+    p = str(path)
+    try:
+        mtime_ns = os.stat(p).st_mtime_ns
+    except OSError:
+        return {}
+
+    hit = _state_cache.get(p)
+    if hit is not None and hit[0] == mtime_ns:
+        return hit[1]
+
+    try:
+        with open(p, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+    _state_cache[p] = (mtime_ns, data)
+    return data
+
+
+def _state_file_paths() -> list[str]:
+    """All state files: active under `.claude/plans/`, archived under `.claude/plans/archive/`."""
+    return sorted(
+        glob.glob(".claude/plans/*.state.json")
+        + glob.glob(".claude/plans/archive/*.state.json")
+    )
+
+
+# ── Public helpers (also used by api_board.py in T4) ───────────────────────
+
+def cost_for_task(plan: str, task: int) -> float:
+    """Total USD spent on (plan, task) summing worker + iterator + reviewer runs.
+
+    `plan` is the plan slug (e.g. "PLAN-06" or
+    "PLAN-06-mission-centre"). Matching is by filename prefix so the
+    short form is accepted. Returns 0.0 if no usage data exists.
+    """
+    matches = [
+        p for p in _state_file_paths()
+        if Path(p).stem.startswith(plan + "-") or Path(p).stem.startswith(plan + ".")
+        or Path(p).stem == f"{plan}.state"
+    ]
+    total = 0.0
+    for path in matches:
+        runs = (
+            _load_state(path)
+            .get("tasks", {})
+            .get(str(task), {})
+            .get("usage", {})
+            .get("runs", [])
+        )
+        total += sum(_run_cost(r) for r in runs if isinstance(r, dict))
+    return round(total, 4)
+
+
+def cost_today() -> dict[str, Any]:
+    """Today's spend across all active + archived plans, broken down by role.
+
+    Returns a dict with `today_usd`, `by_role`, `yesterday_usd`, and
+    `this_week_usd`. Days are UTC. Returns `{}` if no state files exist
+    or none contain any usage data.
+    """
+    now = _dt.datetime.now(_dt.timezone.utc).date()
+    yesterday = now - _dt.timedelta(days=1)
+    week_start = now - _dt.timedelta(days=6)  # last 7 days including today
+
+    today_usd = 0.0
+    by_role: dict[str, float] = {"worker": 0.0, "iterator": 0.0, "reviewer": 0.0}
+    yesterday_usd = 0.0
+    week_usd = 0.0
+
+    any_data = False
+
+    for path in _state_file_paths():
+        state = _load_state(path)
+        for task in (state.get("tasks") or {}).values():
+            for run in (task.get("usage") or {}).get("runs") or []:
+                if not isinstance(run, dict):
+                    continue
+                any_data = True
+                run_at = run.get("run_at") or ""
+                try:
+                    ts = _dt.datetime.fromisoformat(run_at.replace("Z", "+00:00")).date()
+                except (TypeError, ValueError):
+                    continue
+                usd = _run_cost(run)
+                if ts == now:
+                    today_usd += usd
+                    role = run.get("kind") or "worker"
+                    if role in by_role:
+                        by_role[role] += usd
+                if ts == yesterday:
+                    yesterday_usd += usd
+                if ts >= week_start:
+                    week_usd += usd
+
+    if not any_data:
+        return {}
+
+    return {
+        "today_usd": round(today_usd, 4),
+        "by_role": {k: round(v, 4) for k, v in by_role.items()},
+        "yesterday_usd": round(yesterday_usd, 4),
+        "this_week_usd": round(week_usd, 4),
+    }
+
+
+# ── Flask route ────────────────────────────────────────────────────────────
+
+@bp.route("/api/costs")
+def api_costs():
+    """Today's spend + per-active-plan task cost summary.
+
+    Returns `cost_today()` plus a per-task breakdown for every active
+    (non-archived) plan, so a single fetch can power both the right-rail
+    Cost panel and per-card cost badges.
+    """
+    try:
+        today = cost_today()
+        per_task: dict[str, dict[str, float]] = {}
+        for path in glob.glob(".claude/plans/*.state.json"):
+            state = _load_state(path)
+            plan = (state.get("plan_file") or Path(path).stem).split("/")[-1].removesuffix(".md").removesuffix(".state")
+            tasks = state.get("tasks") or {}
+            per_task[plan] = {}
+            for task_id in tasks:
+                try:
+                    per_task[plan][task_id] = cost_for_task(plan.split("-")[0] + "-" + plan.split("-")[1], int(task_id))
+                except (ValueError, IndexError):
+                    continue
+        return jsonify(json_envelope(data={"today": today, "per_task": per_task}))
+    except Exception as e:  # noqa: BLE001 — best-effort endpoint
+        return jsonify(json_envelope(error=f"api_costs: {type(e).__name__}: {e}"))
