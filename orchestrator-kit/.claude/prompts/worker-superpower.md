@@ -25,7 +25,11 @@ designed for — they each cut a known orchestrator failure mode:
   scripts, `Makefile`, `pyproject.toml`, or `justfile` defines). Do NOT
   claim `status: complete` until the commands you ran exit zero.
   False-done is the single most expensive orchestrator failure pattern
-  — every reviewer rejection costs a full iterator context.
+  — every reviewer rejection costs a full iterator context. If your
+  assignment includes an **Acceptance criteria** block, treat each item
+  as a non-negotiable gate: do not report `status: complete` unless every
+  criterion holds, and record each one in `acceptance_check` (see Output).
+  The reviewer verifies these independently and a miss is a hard blocker.
 - **`superpowers:test-driven-development`** — when the task spec demands
   new *behavior* (not just refactoring), write the failing test first,
   watch it fail, then implement. Skip for pure refactors and doc edits.
@@ -182,9 +186,17 @@ around it:
   "files_changed": ["<path>", "..."],
   "tests_run": "<command>",
   "tests_result": "pass" | "fail",
+  "acceptance_check": [{"criterion": "<verbatim>", "met": true | false, "evidence": "<how you verified>"}],
   "followup_issues_filed": [<issue_number>, "..."]
 }
 ```
+
+`acceptance_check` is required when the assignment included an **Acceptance
+criteria** block: one entry per criterion, each `met: true` with concrete
+evidence (a test name, a command's exit, a file/line). Omit the field
+entirely when the task declared no acceptance criteria. If any criterion is
+unattainable as written, set `status: "blocked"` with a `block_reason` rather
+than reporting it `met: false` on a "complete" run.
 
 If status is "blocked", include a `block_reason` field with what's blocking
 and what would unblock it.

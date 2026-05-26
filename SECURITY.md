@@ -37,9 +37,11 @@ on its own; together they reduce, but do not eliminate, the blast radius.
   disables auto-merge for tasks touching IAM, migrations,
   `.github/workflows/`, and similar paths. See the `SENSITIVE_PATTERNS`
   array in `orchestrator-kit/.claude/scripts/ingest-plan.sh`.
-- **Iter cap (`review_iter_cap`)** — reviewer iterations are capped at
-  three per task, so a runaway worker stops rather than looping
-  indefinitely. See `orchestrator-kit/.claude/scripts/iterate-pr.sh`.
+- **Iter cap (`review_iter_cap`)** — reviewer/iterator rounds are capped
+  per task (`ORCH_REVIEW_MAX_ITERS`, default 5), so a runaway worker stops
+  rather than looping indefinitely. On the cap the task is blocked with
+  `blocked_reason: review_iter_cap`. See
+  `orchestrator-kit/.claude/scripts/iterate-pr.sh`.
 - **Branch protection on `main`** — operator-configured, not enforced by
   the kit itself. The auto-merge gate is only as meaningful as the branch
   protection rules behind it.

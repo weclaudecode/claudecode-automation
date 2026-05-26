@@ -76,6 +76,8 @@ cat >> .gitignore <<'EOF'
 .claude/state/dashboard.pid
 .claude/state/dashboard-venv/
 .claude/state/dashboard.log
+.claude/state/events.jsonl
+.claude/state/events.jsonl.*
 EOF
 ```
 
@@ -125,7 +127,9 @@ Safety comes from the layers around the worker, not from sandboxing it:
   (still produces a JSON verdict; loses the multi-perspective signal).
 - **Sensitive tasks** flagged at ingest time land in `auto_merge_overrides`
   and skip `--auto`; merging requires a human.
-- **Iter cap** (`ORCH_MAX_TURNS`, retry limit) halts runaway workers.
+- **Iter cap** (`ORCH_REVIEW_MAX_ITERS`, default 5) bounds the
+  review→iterate loop; combined with the 3-strike worker retry limit, this
+  halts runaway workers rather than looping a failing task forever.
 
 Run the orchestrator in a single repo with branch protection on `main`,
 not in a multi-tenant or shared-credential environment.
@@ -138,8 +142,10 @@ Two env vars override defaults (set in your cron line or shell profile):
 |-----------------------|----------|----------------------------------------------------------|
 | `ORCH_WORKER_MODEL`   | `opus`   | Implementation default. Set to `sonnet` to cut per-task cost ~5× on plans you trust to be simple. |
 | `ORCH_REVIEWER_MODEL` | `opus`   | Top-level reviewer coordinator. The 6 `pr-review-toolkit` specialists each pick their own model; only the coordinator's tokens change. Drop to `sonnet` for a synthesis-cost cut. |
-| `ORCH_MAX_TURNS`      | `30`     | Reviewer-block iterations × ~3 turns each                |
-| `ORCH_LOG_MAX_BYTES`  | `10485760` | Log rotation threshold (default 10 MiB)                |
+| `ORCH_MAX_TURNS`      | `30`     | Per-session `claude -p --max-turns` cap for a worker run (per-task `max_turns:` in the plan overrides it). NOT the review-loop iteration cap — that is `ORCH_REVIEW_MAX_ITERS`. |
+| `ORCH_REVIEW_MAX_ITERS` | `5`    | Max review→iterate rounds before a task blocks with `review_iter_cap` |
+| `ORCH_LOG_MAX_BYTES`  | `10485760` | `orchestrator.log` rotation threshold (default 10 MiB)             |
+| `ORCH_EVENTS_MAX_BYTES` | `10485760` | `events.jsonl` rotation threshold (default 10 MiB)               |
 | `ORCH_DASHBOARD_PORT` | `5174`   | Port the optional [local dashboard](docs/DASHBOARD.md) binds to (127.0.0.1 only) |
 
 ## First run
@@ -157,10 +163,51 @@ cat .claude/plans/PLAN-01-my-feature.state.json
 # Run one tick manually to test
 ./orchestrator.sh
 
-# If that worked, schedule it
-crontab -e
-# Add: */5 * * * * cd /path/to/repo && ./orchestrator.sh >> .claude/state/orchestrator.log 2>&1
+# If that worked, schedule it — see "Scheduling the tick" below.
 ```
+
+## Scheduling the tick
+
+A tick is the unit of progress: `orchestrator.sh` is idempotent and
+self-terminating, so **anything that runs `./orchestrator.sh` on an interval
+drives the loop**. Pick the trigger that matches where you run it.
+
+| Trigger | Runs where | Use when |
+|---|---|---|
+| **Claude Code Routine** | Anthropic-managed cloud | You want scheduled, unattended runs without keeping a machine on. **Recommended.** |
+| **cron / launchd** | A box you keep running | You already self-host and want local control of the schedule. |
+| **`/loop`** | An open Claude Code session | Quick experiments; the loop stops when you close the session. |
+
+### Claude Code Routine (recommended)
+
+A [routine](https://code.claude.com/docs/en/routines) is a scheduled or
+event-triggered Claude Code session that runs on Anthropic's infrastructure —
+no always-on laptop or cron host required. Point one at the orchestrator:
+
+- **Schedule trigger** (e.g. every 5 minutes): run
+  `cd /path/to/repo && ./orchestrator.sh`. One routine run = one tick.
+- **GitHub-event trigger** (optional): fire a tick immediately on
+  `pull_request` merge instead of waiting for the next interval, so a merged
+  PR's dependents launch promptly.
+
+Routines and this kit are complementary, not redundant. A routine handles
+*scheduling and triggering* — it runs a single Claude Code session per fire
+and has no notion of a task DAG. This kit is what the routine runs: it owns
+the `depends_on` gating, the per-task FSM, `touches`-collision-aware
+parallelism, the review→iterate loop, and conditional auto-merge. Use the
+routine to replace cron, not to replace the orchestrator.
+
+### cron / launchd
+
+```cron
+*/5 * * * * cd /path/to/repo && ./orchestrator.sh >> .claude/state/orchestrator.log 2>&1
+```
+
+### `/loop`
+
+In an interactive session at the repo root, run `/loop 5m ./orchestrator.sh`.
+The loop lives only as long as the session is open — fine for watching a plan
+run, not for unattended operation.
 
 ## Local dashboard
 
@@ -365,11 +412,46 @@ gh issue list --label "monitor:finding" --state open
 Findings are append-only: the monitor never modifies plan state or closes PRs.
 Operator action is always required to resolve them.
 
+## Structured event log
+
+Alongside the free-text `orchestrator.log`, the kit appends one JSON object
+per line to `.claude/state/events.jsonl` — a queryable timeline meant for
+dashboards, trend reports, and external observability instead of grepping the
+log. Every line has at least `{ts, event}`; most also carry `plan`, `task`,
+`pr`. Events emitted today:
+
+| `event` | Emitted by | Key fields |
+|---------|-----------|------------|
+| `tick_start` | `orchestrator.sh` | `plan`, `env`, `total`, `max_parallel` |
+| `task_in_review` | `launch-worker.sh` | `task`, `pr`, `auto_merge` |
+| `review` | `review-pr.sh` | `task`, `pr`, `verdict`, `safety_blocks`, `blockers`, `iteration`, `sha` |
+| `task_merged` | `sweep-merges.sh` | `task`, `pr` |
+| `task_blocked` | `sweep-merges.sh` | `task`, `pr`, `reason` |
+| `plan_archived` | `orchestrator.sh` | `status`, `merged`, `blocked`, `total` |
+| `tick_done` | `orchestrator.sh` | `status`, `counts` (per-status histogram) |
+
+```bash
+# Plan progress over time
+jq -r 'select(.event=="tick_done") | "\(.ts) \(.counts)"' .claude/state/events.jsonl
+
+# Every merge, newest last
+jq -r 'select(.event=="task_merged") | "\(.ts) plan \(.plan) task \(.task) PR #\(.pr)"' \
+  .claude/state/events.jsonl
+```
+
+Emission is best-effort and never on a critical path — a write failure drops
+the event rather than failing the tick. Rotates at `ORCH_EVENTS_MAX_BYTES`
+(default 10 MiB), same as `orchestrator.log`. Adding more emit points is a
+one-liner: `emit_event <type> "$(jq -cn ...)"` from any script that sources
+`_dispatcher_lib.sh`.
+
 State file (v2 schema; `ingest-plan.sh` is the canonical source):
 - Top-level: `plan_file`, `total_tasks`, `status` (`in_progress` | `done` | `blocked`),
   `auto_merge_overrides` (`{ "<task>": false }`), `auto_recommended`, `ingested_at`
 - Per-task under `tasks["<n>"]`: `title`, `depends_on`, `touches`, `issue`, `pr`,
-  `status`, `retries`, `max_turns`, and on block `blocked_at` + `blocked_reason`
+  `status`, `retries`, `max_turns`, optional `acceptance` (array of criteria
+  strings — the machine-checkable definition of done), and on block
+  `blocked_at` + `blocked_reason`
   (`worker_failed_3x` | `iterate_failed_3x` | `review_iter_cap` | `pr_closed_unmerged`
   | `upstream_blocked_t<N>`); on merge `merged_at`
 - Per-task FSM: `pending → in_progress → in_review → merged` (any state → `blocked`)
@@ -417,6 +499,7 @@ orchestrator.sh                        — the single-shot tick
     archive/                           — completed plans
   state/
     decisions.md                       — append-only decision log
+    events.jsonl                       — structured event timeline (gitignored)
     run-<task>-r<retry>.json           — per-task-per-retry worker output (gitignored)
     orchestrator.lock/                 — lockdir (gitignored)
     active_worktrees.txt               — tick-scoped worktree registry (gitignored)

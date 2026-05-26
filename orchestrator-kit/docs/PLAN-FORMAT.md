@@ -270,6 +270,37 @@ env beats the built-in default of 30. The env var stays useful as a
 one-off global override during debugging; plans should set the value
 explicitly when a task is reliably tight against the default.
 
+### `acceptance: [...]`
+
+Optional list of acceptance criteria — the machine-checkable definition of
+done for this task. Same bracketed, backtick-wrapped list syntax as
+`touches:`. Each entry is a short, verifiable statement.
+
+```markdown
+## Task 3: Add input validation to the checkout handler
+**depends_on:** [2]
+**touches:** [`src/checkout/handler.py`, `tests/test_handler.py`]
+**acceptance:** [`returns 200 on a valid body`, `rejects an empty body with 400`, `unit tests cover both the valid and invalid paths`]
+```
+
+Captured into `tasks.<N>.acceptance` (an array of strings) at ingest. When
+present, the criteria are:
+
+- injected into the **worker** prompt as an explicit numbered block; the
+  worker must satisfy every item before reporting `status: complete` and
+  records each in its `acceptance_check` output.
+- injected into the **reviewer** prompt; the reviewer verifies each
+  criterion against the diff and emits a `blocker` finding for any it cannot
+  confirm — so an unmet criterion blocks the merge gate.
+
+Keep each criterion to a short phrase. Commas inside a criterion are
+preserved (each entry is backtick-wrapped), but avoid embedded backticks or
+double-quotes. A task with no `acceptance:` line behaves exactly as before —
+the field is optional and additive.
+
+Default (field omitted): no structured criteria; "done" is judged from the
+task prose by the reviewer as before.
+
 ### `deploy_mode: operator | autonomous`
 
 Controls whether the worker runs `cdk deploy` itself or stops short

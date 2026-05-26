@@ -224,6 +224,7 @@ TASKS_JSON=$("$GAWK" '
       current_task, json_escape(title), depends_on, touches_json
     if (auto_merge_set) printf ", \"auto_merge\": %s", auto_merge_value
     if (max_turns_set) printf ", \"max_turns\": %s", max_turns_value
+    if (acceptance_set) printf ", \"acceptance\": [%s]", acceptance_json
     printf ", \"deploy_mode\": \"%s\"", deploy_mode
     if (smoke_test_set) printf ", \"smoke_test\": \"%s\"", json_escape(smoke_test_value)
     printf "}\n"
@@ -231,6 +232,7 @@ TASKS_JSON=$("$GAWK" '
   BEGIN {
     in_fence = 0; current_task = ""; depends_on = ""; touches_json = ""
     auto_merge_set = 0; max_turns_set = 0
+    acceptance_set = 0; acceptance_json = ""
     deploy_mode = "operator"; smoke_test_set = 0; smoke_test_value = ""
     parse_errors = 0
   }
@@ -247,6 +249,8 @@ TASKS_JSON=$("$GAWK" '
     auto_merge_value = ""
     max_turns_set = 0
     max_turns_value = ""
+    acceptance_set = 0
+    acceptance_json = ""
     deploy_mode = "operator"
     smoke_test_set = 0
     smoke_test_value = ""
@@ -268,6 +272,17 @@ TASKS_JSON=$("$GAWK" '
     if (match($0, /\[([^\]]*)\]/, t) > 0) {
       touches_json = t[1]
       gsub(/`/, "\"", touches_json)
+    }
+    next
+  }
+  current_task != "" && /^\*\*acceptance:\*\*/ {
+    # Same bracketed-list shape as touches/depends_on. Each criterion is
+    # backtick-wrapped; replacing backticks with double-quotes yields a
+    # valid JSON array body (commas inside a criterion stay inside quotes).
+    if (match($0, /\[([^\]]*)\]/, ac) > 0) {
+      acceptance_json = ac[1]
+      gsub(/`/, "\"", acceptance_json)
+      acceptance_set = 1
     }
     next
   }
@@ -502,6 +517,7 @@ TASKS_OBJECT=$(printf '%s\n' "$TASKS_JSON" | jq -s '
       deploy_mode: ($t.deploy_mode // "operator")
     }
     + (if $t | has("max_turns") then {max_turns: $t.max_turns} else {} end)
+    + (if ($t | has("acceptance")) and (($t.acceptance | length) > 0) then {acceptance: $t.acceptance} else {} end)
     + (if ($t | has("smoke_test")) and ($t.smoke_test != null) then {smoke_test: $t.smoke_test} else {} end)
   ))
 ')

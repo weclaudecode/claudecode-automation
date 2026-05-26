@@ -185,10 +185,22 @@ fi
 REVIEW_ID=$(echo "$LATEST_REVIEW" | jq -r '.id')
 REVIEW_BODY=$(echo "$LATEST_REVIEW" | jq -r '.body // ""')
 REVIEW_SHA=$(echo "$LATEST_REVIEW" | jq -r '.commit_id // "unknown"')
+# Author of the review we're iterating on. We scope inline comments to this
+# same author below so a reply or comment by a third party can never inject
+# instructions into the bypassPermissions iterator.
+REVIEW_AUTHOR=$(echo "$LATEST_REVIEW" | jq -r '.user.login // ""')
 
+# Inline comments are scoped by BOTH the review id AND the review's author.
+# Matching on review id alone is not sufficient: a reply by another user can
+# carry the orchestrator's pull_request_review_id, and the body of every
+# matched comment is interpolated verbatim into the iterator prompt (which
+# runs with bypassPermissions). Requiring author == the orchestrator review's
+# author closes that injection path. If the author is somehow empty, fall
+# back to id-only scoping rather than including everything.
 INLINE_COMMENTS_JSON=$(gh api "repos/$REPO_OWNER_REPO/pulls/$PR_NUM/comments" --paginate 2>/dev/null || echo "[]")
 SCOPED_COMMENTS=$(echo "$INLINE_COMMENTS_JSON" \
-  | jq --argjson rid "$REVIEW_ID" '[.[] | select(.pull_request_review_id == $rid)]')
+  | jq --argjson rid "$REVIEW_ID" --arg author "$REVIEW_AUTHOR" \
+      '[.[] | select(.pull_request_review_id == $rid and ($author == "" or (.user.login == $author)))]')
 
 INLINE_COUNT=$(echo "$SCOPED_COMMENTS" | jq 'length')
 echo "iterate-pr: latest CHANGES_REQUESTED review id=$REVIEW_ID sha=${REVIEW_SHA:0:8} inline_comments=$INLINE_COUNT"

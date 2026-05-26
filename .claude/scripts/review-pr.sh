@@ -131,6 +131,18 @@ TASK_SPEC=$(extract_task_body "$TASK_NUM")
   exit 1
 }
 
+# Structured acceptance criteria (if declared). Surfaced explicitly to the
+# reviewer so an unmet criterion becomes a deterministic blocker rather than
+# something the reviewer has to infer from the prose spec. Empty when absent.
+ACCEPTANCE_SECTION=$(jq -r --arg t "$TASK_NUM" '
+  (.tasks[$t].acceptance // [])
+  | if length > 0
+    then "## Acceptance criteria (verify each against the diff)\n\n"
+         + ([ to_entries[] | "\(.key + 1). \(.value)" ] | join("\n"))
+         + "\n\nEach criterion the diff does not satisfy is a `blocker` finding."
+    else "" end
+' "$STATE_FILE" 2>/dev/null || echo "")
+
 # ---- Fetch PR diff ----
 PR_DIFF=$(gh pr diff "$PR_NUM" --repo "$REPO" 2>/dev/null) || {
   echo "review-pr: failed to fetch diff for PR #$PR_NUM" >&2
@@ -215,6 +227,8 @@ ${CDK_DIFF_SECTION}
 ## Task spec (verbatim from plan)
 
 $TASK_SPEC
+
+${ACCEPTANCE_SECTION}
 
 ---
 
@@ -453,6 +467,13 @@ EOF
 
 gh pr edit "$PR_NUM" --repo "$REPO" --body "$NEW_PR_BODY" >/dev/null 2>&1 \
   || echo "review-pr: warning — failed to update PR body with iteration markers" >&2
+
+# ---- Emit structured event (best-effort; feeds events.jsonl) ----
+emit_event review "$(jq -cn \
+  --arg plan "$PLAN_NUM" --argjson task "$TASK_NUM" --argjson pr "$PR_NUM" \
+  --arg event "$EVENT" --argjson safety "$HAS_SAFETY" --argjson blocker "$HAS_BLOCKER" \
+  --argjson iter "$NEW_ITER" --arg sha "${HEAD_OID:0:12}" \
+  '{plan: $plan, task: $task, pr: $pr, verdict: $event, safety_blocks: $safety, blockers: $blocker, iteration: $iter, sha: $sha}' 2>/dev/null || echo '{}')"
 
 # ---- Done ----
 echo "review-pr: posted $VERDICT_LINE review (id=$REVIEW_ID) on PR #$PR_NUM"

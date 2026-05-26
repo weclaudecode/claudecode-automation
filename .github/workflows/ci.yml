@@ -36,3 +36,18 @@ jobs:
         run: |
           shellcheck -S warning -e SC2164 -e SC2011 \
             $(find orchestrator-kit -type f -name "*.sh" -not -path "*/archive/*")
+
+  kit-drift:
+    name: kit drift (root vs canonical)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The repo root is a dogfood install of the canonical kit under
+      # orchestrator-kit/. They must not silently diverge — a stale root
+      # copy means the orchestrator we run here lags the source we ship.
+      # kit-upgrade.sh compares orchestrator.sh + .claude/{scripts,hooks,
+      # prompts,commands,docs}/ by hash and exits 1 on any drift.
+      - name: Detect drift between root install and orchestrator-kit
+        run: |
+          bash orchestrator-kit/.claude/scripts/kit-upgrade.sh orchestrator-kit
