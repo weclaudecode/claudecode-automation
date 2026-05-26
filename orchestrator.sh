@@ -388,8 +388,7 @@ fi
 if [ "${ORCH_MONITOR_ENABLED:-1}" = "1" ] && \
    [ -x .claude/scripts/monitor-sweep.sh ]; then
   echo "--- phase 7: monitor sweep ---"
-  STATE_FILE="$STATE_FILE" REPO="$REPO_OWNER_REPO" \
-    bash .claude/scripts/monitor-sweep.sh || \
+  bash .claude/scripts/monitor-sweep.sh "$STATE_FILE" "$REPO_OWNER_REPO" || \
     echo "warning: monitor-sweep exited non-zero (continuing)" >&2
 fi
 
