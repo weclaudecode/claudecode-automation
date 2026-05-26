@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mission Centre — Mockup</title>
+<style>
+  /* ─────────────────────────────────────────────────────────────────────
+     STATIC MOCKUP. Not wired to any backend. All data is hardcoded so the
+     user can see what the production view will look like before we
+     implement it. DiceBear avatars are loaded from the live CDN.
+     ───────────────────────────────────────────────────────────────────── */
+
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1f242c;
+    --border: #2d333b;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --text-faint: #6e7681;
+
+    /* Column accents */
+    --col-backlog:   #6e7681;
+    --col-todo:      #58a6ff;
+    --col-progress:  #d29922;
+    --col-rfr:       #a371f7;
+    --col-review:    #db61a2;
+    --col-blocked:   #f85149;
+    --col-done:      #3fb950;
+
+    /* Plan pill palette (hash mod 8) */
+    --plan-0: #2188ff;
+    --plan-1: #f97583;
+    --plan-2: #b392f0;
+    --plan-3: #34d399;
+    --plan-4: #fbbf24;
+    --plan-5: #f472b6;
+    --plan-6: #60a5fa;
+    --plan-7: #94a3b8;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  }
+
+  /* ─── Top nav (matches the existing dashboard) ───────────────────── */
+  .nav {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 20px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav h1 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .nav h1 .accent { color: var(--col-todo); }
+  .nav .tabs {
+    display: flex;
+    gap: 4px;
+    margin-left: 20px;
+  }
+  .nav .tab {
+    padding: 6px 12px;
+    border-radius: 6px;
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 13px;
+  }
+  .nav .tab:hover { background: var(--panel-2); color: var(--text); }
+  .nav .tab.active {
+    background: var(--panel-2);
+    color: var(--text);
+    box-shadow: inset 0 -2px 0 var(--col-todo);
+  }
+  .nav .meta {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-faint);
+    display: flex;
+    gap: 16px;
+    align-items: center;
+  }
+  .nav .meta .dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    margin-right: 4px;
+    vertical-align: middle;
+  }
+  .nav .meta .dot.live { background: var(--col-done); box-shadow: 0 0 6px var(--col-done); }
+
+  /* ─── Board grid ─────────────────────────────────────────────────── */
+  .board {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(220px, 1fr));
+    gap: 12px;
+    padding: 16px;
+    overflow-x: auto;
+    min-height: calc(100vh - 50px);
+  }
+
+  /* ─── Column ─────────────────────────────────────────────────────── */
+  .col {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    min-width: 220px;
+  }
+  .col-header {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .col-header .accent {
+    width: 4px;
+    height: 16px;
+    border-radius: 2px;
+  }
+  .col-header h2 {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex: 1;
+    color: var(--text);
+  }
+  .col-header .count {
+    background: var(--panel-2);
+    color: var(--text-dim);
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .col-body {
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  .col-body:empty::after {
+    content: "—";
+    color: var(--text-faint);
+    text-align: center;
+    padding: 12px 0;
+  }
+
+  /* ─── Card ───────────────────────────────────────────────────────── */
+  .card {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px;
+    cursor: pointer;
+    transition: transform 0.08s ease, border-color 0.08s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .card:hover {
+    border-color: var(--col-todo);
+    transform: translateY(-1px);
+  }
+
+  .card-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+  }
+  .plan-pill {
+    background: var(--plan-0);
+    color: #0d1117;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-weight: 700;
+    font-size: 10px;
+    letter-spacing: 0.02em;
+  }
+  .task-id {
+    color: var(--text-faint);
+    font-weight: 600;
+  }
+  .card-head .right {
+    margin-left: auto;
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+  .sensitive {
+    color: var(--col-blocked);
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .card-title {
+    font-size: 13px;
+    color: var(--text);
+    font-weight: 500;
+    line-height: 1.35;
+  }
+
+  .card-agent {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .card-agent img {
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    background: var(--bg);
+    flex-shrink: 0;
+  }
+  .card-agent .agent-name {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .card-agent .deps {
+    margin-left: auto;
+    color: var(--text-faint);
+    font-size: 11px;
+  }
+
+  .card-foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-faint);
+  }
+  .card-foot .pr {
+    color: var(--col-todo);
+    font-weight: 500;
+  }
+  .card-foot .pr:hover { text-decoration: underline; }
+  .card-foot .badge {
+    background: rgba(210, 153, 34, 0.15);
+    color: #d29922;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+  .card-foot .cost {
+    margin-left: auto;
+    background: rgba(63, 185, 80, 0.15);
+    color: var(--col-done);
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+
+  /* Blocked-card joke */
+  .card-joke {
+    padding: 6px 8px;
+    background: rgba(248, 81, 73, 0.08);
+    border-left: 2px solid var(--col-blocked);
+    color: var(--text-dim);
+    font-size: 11px;
+    font-style: italic;
+    border-radius: 0 4px 4px 0;
+  }
+  .card-joke::before {
+    content: "🤖 ";
+    font-style: normal;
+  }
+
+  /* Done card variant — muted */
+  .card.done {
+    opacity: 0.85;
+  }
+  .card.done .card-title {
+    color: var(--text-dim);
+  }
+
+  /* Backlog plain-icon variant (no agent) */
+  .card-icon {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .card-icon .glyph {
+    width: 24px; height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    background: var(--bg);
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  /* Reviewer pinned styling */
+  .card-agent.reviewer .agent-name {
+    color: var(--col-review);
+  }
+
+  /* Plan pill colors */
+  .plan-pill.plan-5 { background: var(--plan-2); }
+  .plan-pill.plan-3 { background: var(--plan-4); color: #0d1117; }
+  .plan-pill.plan-7 { background: var(--plan-5); color: #0d1117; }
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <h1>🛰 <span class="accent">Mission Centre</span></h1>
+  <div class="tabs">
+    <a class="tab" href="#">Dashboard</a>
+    <a class="tab active" href="#">Board</a>
+  </div>
+  <div class="meta">
+    <span><span class="dot live"></span>live · refresh 5s</span>
+    <span>tick #1,247</span>
+    <span>auto-refresh: <strong>on</strong></span>
+  </div>
+</div>
+
+<div class="board">
+
+  <!-- ─── BACKLOG ─── -->
+  <div class="col">
+    <div class="col-header">
+      <span class="accent" style="background: var(--col-backlog);"></span>
+      <h2>Backlog</h2>
+      <span class="count">2</span>
+    </div>
+    <div class="col-body">
+
+      <div class="card" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/issues/14','_blank')">
+        <div class="card-head">
+          <span class="task-id">monitor:finding</span>
+          <span class="right"><span style="color: var(--col-progress);">⚠ H1</span></span>
+        </div>
+        <div class="card-title">PR #142 stuck in orch:needs-robbie for &gt;24h</div>
+        <div class="card-icon">
+          <span class="glyph">📌</span>
+          <span>opened 18h ago</span>
+        </div>
+      </div>
+
+      <div class="card" onclick="window.open('#','_blank')">
+        <div class="card-head">
+          <span class="plan-pill plan-7">PLAN-07</span>
+          <span class="task-id">blocked on upstream</span>
+        </div>
+        <div class="card-title">PLAN-07-receipt-pipeline waiting on PLAN-06</div>
+        <div class="card-icon">
+          <span class="glyph">⏸</span>
+          <span>archived 2d ago · requires PLAN-06 (blocked)</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ─── TODO ─── -->
+  <div class="col">
+    <div class="col-header">
+      <span class="accent" style="background: var(--col-todo);"></span>
+      <h2>Todo</h2>
+      <span class="count">3</span>
+    </div>
+    <div class="col-body">
+
+      <div class="card" onclick="window.open('#','_blank')">
+        <div class="card-head">
+          <span class="plan-pill plan-5">PLAN-05</span>
+          <span class="task-id">T4</span>
+        </div>
+        <div class="card-title">Deploy receipt-sender stack via CDK</div>
+        <div class="card-icon">
+          <span class="glyph">📝</span>
+          <span class="deps" style="margin-left:auto;">deps: T2, T3</span>
+        </div>
+      </div>
+
+      <div class="card" onclick="window.open('#','_blank')">
+        <div class="card-head">
+          <span class="plan-pill plan-5">PLAN-05</span>
+          <span class="task-id">T5</span>
+          <span class="right"><span class="sensitive">🛡 sensitive</span></span>
+        </div>
+        <div class="card-title">Migrate auth middleware to JWT v2</div>
+        <div class="card-icon">
+          <span class="glyph">📝</span>
+          <span class="deps" style="margin-left:auto;">deps: T4</span>
+        </div>
+      </div>
+
+      <div class="card" onclick="window.open('#','_blank')">
+        <div class="card-head">
+          <span class="plan-pill plan-5">PLAN-05</span>
+          <span class="task-id">T6</span>
+        </div>
+        <div class="card-title">Add Bedrock model access check to preflight</div>
+        <div class="card-icon">
+          <span class="glyph">📝</span>
+          <span class="deps" style="margin-left:auto;">deps: T1</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ─── IN PROGRESS ─── -->
+  <div class="col">
+    <div class="col-header">
+      <span class="accent" style="background: var(--col-progress);"></span>
+      <h2>In Progress</h2>
+      <span class="count">2</span>
+    </div>
+    <div class="col-body">
+
+      <div class="card" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/issues/41','_blank')">
+        <div class="card-head">
+          <span class="plan-pill plan-5">PLAN-05</span>
+          <span class="task-id">T2</span>
+        </div>
+        <div class="card-title">Add receipt-sender Lambda</div>
+        <div class="card-agent">
+          <img src="https://api.dicebear.com/8.x/lorelei/svg?seed=Lovelace" alt="">
+          <span class="agent-name">Cmdr. Lovelace</span>
+          <span class="deps">deps: T1</span>
+        </div>
+        <div class="card-foot">
+          <span>worker · pid 41832</span>
+          <span class="badge">14m elapsed</span>
+        </div>
+      </div>
+
+      <div class="card" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/issues/42','_blank')">
+        <div class="card-head">
+          <span class="plan-pill plan-5">PLAN-05</span>
+          <span class="task-id">T3</span>
+        </div>
+        <div class="card-title">Wire receipt-sender into checkout flow</div>
+        <div class="card-agent">
+          <img src="https://api.dicebear.com/8.x/lorelei/svg?seed=Khwarizmi" alt="">
+          <span class="agent-name">al-Khwarizmi</span>
+          <span class="deps">deps: T2</span>
+        </div>
+        <div class="card-foot">
+          <span>worker · pid 41980</span>
+          <span class="badge">3m elapsed</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ─── READY FOR REVIEW ─── -->
+  <div class="col">
+    <div class="col-header">
+      <span class="accent" style="background: var(--col-rfr);"></span>
+      <h2>Ready for Review</h2>
+      <span class="count">1</span>
+    </div>
+    <div class="col-body">
+
+      <div class="card" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/pull/143','_blank')">
+        <div class="card-head">
+          <span class="plan-pill plan-5">PLAN-05</span>
+          <span class="task-id">T1</span>
+        </div>
+        <div class="card-title">Add receipt template module</div>
+        <div class="card-agent">
+          <img src="https://api.dicebear.com/8.x/lorelei/svg?seed=Hopper" alt="">
+          <span class="agent-name">Cmdr. Hopper</span>
+        </div>
+        <div class="card-foot">
+          <span class="pr">#143</span>
+          <span class="badge" style="background: rgba(88,166,255,0.15); color: var(--col-todo);">awaiting reviewer</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ─── IN REVIEW ─── -->
+  <div class="col">
+    <div class="col-header">
+      <span class="accent" style="background: var(--col-review);"></span>
+      <h2>In Review</h2>
+      <span class="count">2</span>
+    </div>
+    <div class="col-body">
+
+      <div class="card" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/pull/144','_blank')">
+        <div class="card-head">
+          <span class="plan-pill plan-3">PLAN-03</span>
+          <span class="task-id">T7</span>
+        </div>
+        <div class="card-title">Add input validation to checkout handler</div>
+        <div class="card-agent reviewer">
+          <img src="https://api.dicebear.com/8.x/bottts/svg?seed=Argus" alt="">
+          <span class="agent-name">Argus</span>
+          <span class="deps">reviewing</span>
+        </div>
+        <div class="card-foot">
+          <span class="pr">#144</span>
+          <span class="badge">2 blockers</span>
+        </div>
+      </div>
+
+      <div class="card" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/pull/145','_blank')">
+        <div class="card-head">
+          <span class="plan-pill plan-3">PLAN-03</span>
+          <span class="task-id">T8</span>
+        </div>
+        <div class="card-title">Refactor session-token storage for compliance</div>
+        <div class="card-agent">
+          <img src="https://api.dicebear.com/8.x/lorelei/svg?seed=Liskov" alt="">
+          <span class="agent-name">Liskov</span>
+          <span class="deps">iterating</span>
+        </div>
+        <div class="card-foot">
+          <span class="pr">#145</span>
+          <span class="badge">iterating r2/5</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ─── BLOCKED ─── -->
+  <div class="col">
+    <div class="col-header">
+      <span class="accent" style="background: var(--col-blocked);"></span>
+      <h2>Blocked</h2>
+      <span class="count">2</span>
+    </div>
+    <div class="col-body">
+
+      <div class="card" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/pull/142','_blank')">
+        <div class="card-head">
+          <span class="plan-pill plan-5">PLAN-05</span>
+          <span class="task-id">T0</span>
+          <span class="right"><span class="sensitive">🛡 sensitive</span></span>
+        </div>
+        <div class="card-title">Update IAM role for cross-account Bedrock access</div>
+        <div class="card-agent">
+          <img src="https://api.dicebear.com/8.x/lorelei/svg?seed=Wozniak" alt="">
+          <span class="agent-name">Wozniak</span>
+          <span class="deps">awaiting human</span>
+        </div>
+        <div class="card-joke">404: human-in-the-loop not found.</div>
+        <div class="card-foot">
+          <span class="pr">#142</span>
+          <span class="badge" style="background: rgba(248,81,73,0.15); color: var(--col-blocked);">needs-robbie</span>
+        </div>
+      </div>
+
+      <div class="card" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/issues/46','_blank')">
+        <div class="card-head">
+          <span class="plan-pill plan-3">PLAN-03</span>
+          <span class="task-id">T9</span>
+        </div>
+        <div class="card-title">Wire OAuth callback to new auth service</div>
+        <div class="card-agent">
+          <img src="https://api.dicebear.com/8.x/lorelei/svg?seed=Marvin" alt="">
+          <span class="agent-name">Marvin</span>
+          <span class="deps">retry 3/3</span>
+        </div>
+        <div class="card-joke">I tried. Brain too small. Send human.</div>
+        <div class="card-foot">
+          <span class="pr">#146</span>
+          <span class="badge" style="background: rgba(248,81,73,0.15); color: var(--col-blocked);">worker_failed_3x</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ─── DONE ─── -->
+  <div class="col">
+    <div class="col-header">
+      <span class="accent" style="background: var(--col-done);"></span>
+      <h2>Done</h2>
+      <span class="count">3</span>
+    </div>
+    <div class="col-body">
+
+      <div class="card done" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/pull/140','_blank')">
+        <div class="card-head">
+          <span class="plan-pill plan-5">PLAN-05</span>
+          <span class="task-id">T0a</span>
+        </div>
+        <div class="card-title">Bootstrap CDK app skeleton</div>
+        <div class="card-agent">
+          <img src="https://api.dicebear.com/8.x/lorelei/svg?seed=Aryabhata" alt="">
+          <span class="agent-name">Aryabhata</span>
+        </div>
+        <div class="card-foot">
+          <span class="pr">#140</span>
+          <span>merged 2h ago</span>
+          <span class="cost">$0.31</span>
+        </div>
+      </div>
+
+      <div class="card done" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/pull/138','_blank')">
+        <div class="card-head">
+          <span class="plan-pill plan-3">PLAN-03</span>
+          <span class="task-id">T6</span>
+        </div>
+        <div class="card-title">Add structured logging to payment handler</div>
+        <div class="card-agent">
+          <img src="https://api.dicebear.com/8.x/lorelei/svg?seed=Berners-Lee" alt="">
+          <span class="agent-name">Berners-Lee</span>
+        </div>
+        <div class="card-foot">
+          <span class="pr">#138</span>
+          <span>merged yesterday</span>
+          <span class="cost">$1.04</span>
+        </div>
+      </div>
+
+      <div class="card done" onclick="window.open('https://github.com/weclaudecode/claudecode-automation/pull/135','_blank')">
+        <div class="card-head">
+          <span class="plan-pill plan-3">PLAN-03</span>
+          <span class="task-id">T5</span>
+        </div>
+        <div class="card-title">Migrate config loader to pydantic v2</div>
+        <div class="card-agent">
+          <img src="https://api.dicebear.com/8.x/lorelei/svg?seed=Lamarr" alt="">
+          <span class="agent-name">Lamarr</span>
+        </div>
+        <div class="card-foot">
+          <span class="pr">#135</span>
+          <span>merged 3d ago</span>
+          <span class="cost">$0.72</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>
