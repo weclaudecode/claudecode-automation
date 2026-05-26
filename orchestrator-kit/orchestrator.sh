@@ -34,8 +34,8 @@ cd "$REPO"
 # the tick header, so misconfig is visible without aborting the tick.
 for _orch_cfg in .envrc .claude/orchestrator.env; do
   if [ -f "$_orch_cfg" ]; then
-    # shellcheck source=/dev/null
     set +u
+    # shellcheck source=/dev/null
     source "$_orch_cfg" 2>/dev/null || true
     set -u
   fi
@@ -378,8 +378,7 @@ fi
 if [ "${ORCH_MONITOR_ENABLED:-1}" = "1" ] && \
    [ -x .claude/scripts/monitor-sweep.sh ]; then
   echo "--- phase 7: monitor sweep ---"
-  STATE_FILE="$STATE_FILE" REPO="$REPO_OWNER_REPO" \
-    bash .claude/scripts/monitor-sweep.sh || \
+  bash .claude/scripts/monitor-sweep.sh "$STATE_FILE" "$REPO_OWNER_REPO" || \
     echo "warning: monitor-sweep exited non-zero (continuing)" >&2
 fi
 
