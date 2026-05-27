@@ -211,9 +211,13 @@ run, not for unattended operation.
 
 ## Local dashboard
 
-Optional read-only Flask UI at `http://127.0.0.1:5174/` showing plan
-status, log tail, GitHub issues/PRs, active workers, and effective
-config:
+Optional read-only Flask UI at `http://127.0.0.1:5174/`. The landing
+page is the **Mission Centre** — a unified seven-column kanban board
+(Backlog · Todo · In Progress · Ready For Review · In Review · Blocked
+· Done) with telemetry rails for active workers, plan status, cost,
+live log, recent activity, and GitHub. The legacy six-panel view (plan
+status, log tail, GitHub issues/PRs, workers, config) is still
+available at `http://127.0.0.1:5174/dashboard`.
 
 ```bash
 ./.claude/scripts/dashboard.sh start    # creates venv on first run
@@ -222,7 +226,8 @@ config:
 ```
 
 Localhost-only, no auth, single-operator tool. Full reference:
-[`docs/DASHBOARD.md`](docs/DASHBOARD.md).
+[`docs/DASHBOARD.md`](docs/DASHBOARD.md). Visual target:
+[`docs/mockups/mission-centre-unified.html`](docs/mockups/mission-centre-unified.html).
 
 ## How it works
 

@@ -12,18 +12,26 @@ From the repo root where the kit is installed:
 ./.claude/scripts/dashboard.sh start
 ```
 
-Then open `http://127.0.0.1:5174/` in a browser. An alerts strip at
-the top promotes anything actionable; six panels below render the
-current state:
+Then open `http://127.0.0.1:5174/` in a browser. The landing page is the
+**[Mission Centre](#mission-centre)** — a unified seven-column kanban
+board with telemetry rails around it. The previous six-panel layout
+(Alerts strip, Plan Status, Logs, Issues + PRs, Workers, Config) is
+still available at `http://127.0.0.1:5174/dashboard` for operators who
+prefer it; that view is documented under
+[Legacy view panels (`/dashboard`)](#legacy-view-panels-dashboard) below.
 
-| Surface      | Source                                                  |
-|--------------|---------------------------------------------------------|
-| Alerts strip | union of blocked-task / needs-robbie / monitor / dead-orchestrator (see below) |
-| Plan Status  | active `.claude/plans/*.state.json`                     |
-| Logs         | `.claude/state/orchestrator.log` (tail)                 |
-| Issues + PRs | `gh issue list` + `gh pr list` (30s cache, with CI dot) |
-| Workers      | `ps` for `claude -p` + active-worktrees manifest        |
-| Config       | env vars + `.claude/settings.json` + plan state         |
+Sources at a glance (both views read the same underlying state):
+
+| Surface       | Source                                                  |
+|---------------|---------------------------------------------------------|
+| Board columns | `api_board.py` over active + archived state files, GH issues, PRs, active worktrees |
+| Alerts strip  | union of blocked-task / needs-robbie / monitor / dead-orchestrator |
+| Plan Status   | active `.claude/plans/*.state.json`                     |
+| Logs          | `.claude/state/orchestrator.log` (tail)                 |
+| Issues + PRs  | `gh issue list` + `gh pr list` (30s cache, with CI dot) |
+| Workers       | `ps` for `claude -p` + active-worktrees manifest        |
+| Cost          | `run-*.json` × pricing snapshot in `api_costs.py`       |
+| Config        | env vars + `.claude/settings.json` + plan state         |
 
 To stop:
 
@@ -33,7 +41,141 @@ To stop:
 
 Other subcommands: `status`, `restart`, `--help`.
 
-## What each panel shows
+## Mission Centre
+
+The default landing page at `http://127.0.0.1:5174/` is the **Mission
+Centre** — a unified seven-column kanban board across the top with
+telemetry rails (workers, plan status, cost, live log, recent activity,
+GitHub) tucked around it. One page, no tab switching: it answers "what
+is the orchestrator doing right now and what does it need from me?".
+
+The legacy six-panel view (Alerts strip, Plan Status, Logs, Issues +
+PRs, Workers, Config) lives at `http://127.0.0.1:5174/dashboard`.
+Everything described in
+[Legacy view panels (`/dashboard`)](#legacy-view-panels-dashboard) below
+applies to that route.
+
+Visual reference: open
+[`mockups/mission-centre-unified.html`](mockups/mission-centre-unified.html)
+in a browser for the approved target layout, colors, and card density.
+The board is hot-reloaded by polling `/api/board` every 5 s, so the
+template at `templates/board.html` is intentionally Jinja-free —
+`api_board.py` is the only source of state.
+
+### Column mapping
+
+Each task appears in exactly one of seven columns. The pure-function
+column builder lives in `api_board.py::build_board`; the full test
+matrix is in `orchestrator-kit/tests/_test_board_api.sh`.
+
+| Column | Source rule |
+|--------|-------------|
+| **Backlog** | Open GH issues labelled `monitor:finding`; plus plans archived with `status: blocked`. |
+| **Todo** | Tasks with `status: pending`. The only column that scrolls — height capped via `.col.scroll .col-body` in `board.css`. |
+| **In Progress** | Tasks with `status: in_progress`. |
+| **Ready For Review** | `status: in_review`, PR open, no `orch:review-sha:*` label yet (reviewer hasn't stamped this HEAD). |
+| **In Review** | `status: in_review`, PR open, carries an `orch:review-sha:*` label (reviewer has stamped at least one pass; an iterator may also be running). |
+| **Blocked** | `status: blocked` PLUS in-review tasks where `auto_merge_overrides[N] == false` and the PR carries `orch:needs-robbie` (sensitive flag). |
+| **Done** | `status: merged`. |
+
+Precedence is top-down: a sensitive in-review task lands in **Blocked**,
+not In Review. Note also that the `merged → Done` rule is applied
+**before** any `orch:safety-block` label check, so a PR that is
+already on `main` never flashes through Blocked during the gap between
+`gh pr merge` and the next `sweep-merges` tick.
+
+PID, elapsed, and last-log line for In Progress / iterating tasks
+surface on the right-rail Active Workers panel (`_workers_panel` in
+`api_board.py`), not on the board card itself.
+
+### Agent identity
+
+Each card carries an avatar so the operator builds per-task memory
+across retries and dashboard restarts.
+
+- **Workers / iterators** — pool of one-word names defined in
+  `static/agents.json` (currently 20: Pip, Bento, Nova, Echo, Glitch,
+  Bug, Mochi, Cosmo, Pixel, Spark, Tofu, Otter, Pepper, Patch, Loop,
+  Snap, Tweak, Zog, Boop, Comet). Assignment is deterministic — an
+  md5-derived stable hash of `(plan_slug, task_num)` modulo the pool
+  size; see `api_board.py::_stable_hash` and `agent_for_task` for the
+  exact formula. Task 3 of PLAN-05 is always the same character across
+  retries, iterations, and dashboard restarts. Python's built-in
+  `hash()` is intentionally not used: it is `PYTHONHASHSEED`-randomized
+  and would silently reshuffle every avatar on every dashboard restart.
+  Adding or removing a name in `agents.json` reshuffles every existing
+  assignment — a one-time UX cost of growing the roster.
+- **Reviewer** — fixed character **Argus** with a pink DiceBear
+  background, pinned to every In Review card. (The SPEC describes a
+  swap-back to the per-task worker character once an iterator picks
+  up; the current implementation in `_agent_for_column` keeps Argus
+  pinned for the whole In Review lifetime. Surfacing the iterator's
+  identity on the card is a backlog UI follow-up.)
+- **Avatars** — DiceBear v8 `bottts` style, fetched from
+  `https://api.dicebear.com`. The frontend checks `naturalWidth === 0`
+  in the image `onload` handler to detect a CDN error page served with
+  HTTP 200 (where `onerror` doesn't fire). When DiceBear is unreachable,
+  the fallback is a client-side initials-on-color SVG generated from
+  the agent name — no network required for the offline case.
+
+The per-column role mapping (which character class appears where) is
+documented in
+[`SPEC-mission-centre.md`](SPEC-mission-centre.md) § "Agent role per
+column".
+
+### Cost panel
+
+Headline today is **notional USD spend across all worker, reviewer,
+and iterator runs**, computed by `api_costs.py::cost_today` from
+per-run usage records stored at `tasks[N].usage.runs[]` in each plan's
+state file. The panel also shows a per-role split (worker / iterator
+/ reviewer), a yesterday comparison, and week-to-date. The pricing
+snapshot is inlined in `api_costs.py` with a snapshot-date comment
+naming the source URL; bump it when Anthropic publishes new rates.
+
+A token-first headline (input / output / cache read / cache write) is
+the eventual design target — `api_costs.py::tokens_today` already
+computes the rollup, and the frontend at `static/board.js` has a
+token-first render branch wired to `cost.today_tokens.total`. The
+board route currently only wires `cost_today()` into the payload, so
+the token branch is dormant until that wiring lands. The Max-plan
+rationale (tokens are the real meter, not USD) still applies.
+
+### Blocked-card jokes
+
+Blocked cards show a one-line joke from `static/blocked_jokes.json`.
+The rotation key is a deterministic md5-derived hash of `(plan_slug,
+task_num, utc_date)` modulo the joke pool size — same blocked task
+shows the same joke today and a different one tomorrow, so the page
+stays animated without churning on every 5 s poll. See
+`api_board.py::joke_for_task` for the exact formula. `utc_date` is a
+required argument to `build_board` (not derived from `datetime.now()`
+inside the builder) so the joke can never flip mid-poll at 00:00 UTC.
+
+### Files added for Mission Centre
+
+```
+.claude/scripts/dashboard/
+  api_board.py            — pure-function column builder + payload composer
+  api_costs.py            — token + USD rollup
+  api_workers.py          — extended with last_log line per worker
+  templates/
+    board.html            — Mission Centre landing template (no Jinja substitutions)
+  static/
+    board.css             — Mission Centre styles
+    board.js              — Mission Centre frontend, polls /api/board every 5 s
+    agents.json           — worker name pool + Argus (the reviewer)
+    blocked_jokes.json    — joke pool
+```
+
+## Legacy view panels (`/dashboard`)
+
+Everything in this section describes the six-panel view served at
+`http://127.0.0.1:5174/dashboard`. It is unchanged from prior versions
+and remains the canonical reference for the underlying endpoints —
+`/api/alerts`, `/api/plan`, `/api/logs`, `/api/github`, `/api/workers`,
+and `/api/config`. The [Mission Centre](#mission-centre) at `/` is a
+superset built from the same data plus `/api/board`.
 
 **Alerts strip** — sits between the header and the panel grid. Hidden
 when empty. Surfaces four alert kinds that would otherwise be buried
@@ -194,11 +336,12 @@ other panels.
 | Endpoint        | Method | Query params                     | Source                                  |
 |-----------------|--------|----------------------------------|-----------------------------------------|
 | `/api/healthz`  | GET    | —                                | trivial liveness probe                  |
+| `/api/board`    | GET    | —                                | unified Mission Centre payload — composes columns + workers + plan status + cost + log tail + activity + github via `api_board.build_board` |
 | `/api/alerts`   | GET    | —                                | blocked tasks + `orch:needs-robbie` PRs + `monitor:finding` issues + dead-orch detector |
 | `/api/plan`     | GET    | —                                | newest `*.state.json` with `in_progress` |
 | `/api/logs`     | GET    | `lines`, `since`, `include_rotated` | `.claude/state/orchestrator.log`    |
 | `/api/github`   | GET    | —                                | `gh issue list` + `gh pr list` (30s cache; `ci_state` per PR) |
-| `/api/workers`  | GET    | —                                | `ps` + active-worktrees manifest        |
+| `/api/workers`  | GET    | —                                | `ps` + active-worktrees manifest (each worker carries a `last_log` line) |
 | `/api/config`   | GET    | —                                | env + settings.json + plan state        |
 
 ### Examples
@@ -240,17 +383,25 @@ found via `pgrep -f 'dashboard/app.py'`.
   dashboard.sh                   — launcher (start|stop|status|restart)
   dashboard/
     __init__.py
-    app.py                       — Flask factory + blueprint auto-discovery
+    app.py                       — Flask factory + blueprint auto-discovery; / → Mission Centre, /dashboard → legacy
     requirements.txt             — Flask>=3.0,<4.0
+    api_board.py                 — /api/board (Mission Centre unified payload)
+    api_costs.py                 — token + USD rollup, used by /api/board
     api_plan.py                  — /api/plan
     api_logs.py                  — /api/logs
     api_github.py                — /api/github
-    api_workers.py               — /api/workers
+    api_workers.py               — /api/workers (now includes last_log per worker)
     api_config.py                — /api/config
+    templates/
+      board.html                 — Mission Centre landing template (served at /)
     static/
-      index.html
-      dashboard.js
-      style.css
+      index.html                 — legacy 6-panel view (served at /dashboard)
+      dashboard.js               — legacy frontend
+      style.css                  — legacy styles
+      board.js                   — Mission Centre frontend
+      board.css                  — Mission Centre styles
+      agents.json                — worker name pool + Argus (the reviewer)
+      blocked_jokes.json         — joke pool for Blocked-column cards
 
 .claude/state/                    (runtime — gitignored)
   dashboard.pid
