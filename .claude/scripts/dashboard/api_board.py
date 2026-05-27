@@ -251,7 +251,7 @@ def _fetch_pr_labels() -> tuple[dict[int, list[str]], str | None]:
         return labels_by_pr, err
 
 
-# Test hook — pytest/T7 can call this between scenarios to drop the cache.
+# Test hook — drops the cache between scenarios.
 def _reset_pr_label_cache() -> None:
     global _pr_meta_cache
     with _pr_meta_lock:
@@ -297,8 +297,7 @@ def _column_for_task(
         if pr_merged:
             return "done"
         if not pr_open:
-            # Closed-unmerged with state still in_review — defensive fallback;
-            # orchestrator should have transitioned to blocked.
+            # Defensive: orchestrator normally transitions these to blocked first.
             return "blocked"
         has_review_sha = any(lbl.startswith("orch:review-sha:") for lbl in pr_labels)
         return "in_review" if has_review_sha else "ready_for_review"
@@ -377,7 +376,7 @@ def build_board(
     cost_fn: Callable[[str, int], float] | None = None,
     utc_date: str,
 ) -> dict[str, list[dict]]:
-    """Pure column-builder — no IO. Tests pass synthetic inputs.
+    """Pure column-builder — no IO inside.
 
     `utc_date` is required (not defaulted) so the caller is responsible
     for time. A pure function that called `datetime.now()` itself would
@@ -591,6 +590,9 @@ def _log_tail(
 def _activity_tail(
     n: int = _EVENTS_TAIL_LINES, path: Path | None = None,
 ) -> tuple[list[dict], str | None]:
+    # Tuple-return shape mirrors `_log_tail`: empty+None = "file empty",
+    # empty+err = "read failed" — keeps the frontend able to distinguish
+    # a quiet writer from a broken one.
     p = path or _DEFAULT_EVENTS_PATH
     if not p.is_file():
         return [], None
@@ -626,6 +628,9 @@ def _activity_tail(
             "detail": json.dumps(extras, default=str) if extras else "",
         })
     if skipped:
+        # Debug-level: corrupt event lines often come from writer crashes
+        # mid-line; warning every poll would swamp dashboard.log. Operators
+        # who suspect a degraded events writer should bump the log level.
         log.debug("api_board: activity_tail skipped %d malformed lines in %s", skipped, p)
     return out, None
 
@@ -675,7 +680,6 @@ def board_endpoint():
             "suggestion": "validate .claude/plans/*.state.json with `python -m json.tool`",
         })
 
-    # api_github contract: returns (None, err) on failure, (dict, None) on success.
     gh_data, gh_err = _gh_fetch_payload()
     if gh_err:
         errors.append({
