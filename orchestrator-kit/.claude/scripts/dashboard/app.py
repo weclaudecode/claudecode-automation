@@ -23,6 +23,7 @@ from flask import Flask, jsonify, send_from_directory
 
 DASHBOARD_DIR = Path(__file__).resolve().parent
 STATIC_DIR = DASHBOARD_DIR / "static"
+TEMPLATES_DIR = DASHBOARD_DIR / "templates"
 
 log = logging.getLogger("dashboard")
 
@@ -75,12 +76,28 @@ def create_app(host: str = "127.0.0.1") -> Flask:
         return jsonify(json_envelope(data={"ok": True}))
 
     @app.route("/")
-    def index():
+    def mission_centre():
+        # PLAN-06 T6: Mission Centre is the new default landing page.
+        # T5 (board.html/css/js) drives the unified view via /api/board.
+        board_path = TEMPLATES_DIR / "board.html"
+        if not board_path.exists():
+            return (
+                "<h1>dashboard up — Mission Centre frontend not installed</h1>"
+                "<p>see /dashboard for the legacy 6-panel view, /api/healthz for status</p>",
+                200,
+            )
+        return send_from_directory(str(TEMPLATES_DIR), "board.html")
+
+    @app.route("/dashboard")
+    def legacy_dashboard():
+        # Legacy 6-panel view, served at /dashboard since T6. Operators
+        # who prefer the older layout (and the routine workflows that
+        # bookmarked /) reach it here.
         index_path = STATIC_DIR / "index.html"
         if not index_path.exists():
             return (
-                "<h1>dashboard up — frontend not yet installed</h1>"
-                "<p>see /api/healthz</p>",
+                "<h1>dashboard up — legacy frontend not installed</h1>"
+                "<p>see / for Mission Centre, /api/healthz for status</p>",
                 200,
             )
         return send_from_directory(str(STATIC_DIR), "index.html")
