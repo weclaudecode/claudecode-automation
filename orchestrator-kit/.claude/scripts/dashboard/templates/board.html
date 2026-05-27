@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mission Centre — orchestrator dashboard</title>
+  <link rel="stylesheet" href="/static/board.css">
+</head>
+<body>
+
+  <div class="nav" role="banner">
+    <h1>🛰 <span class="accent">Mission Centre</span></h1>
+    <nav class="tabs" aria-label="Dashboard views">
+      <a class="tab active" href="/" aria-current="page">Mission Centre</a>
+      <a class="tab" href="/dashboard">Dashboard (legacy)</a>
+    </nav>
+    <div class="meta" id="nav-meta">
+      <span id="nav-live"><span class="dot"></span>live · refresh 5s</span>
+      <span id="nav-as-of">—</span>
+      <span id="nav-plan">plan: —</span>
+    </div>
+  </div>
+
+  <div class="alerts" id="alerts-strip" hidden></div>
+
+  <div class="main">
+
+    <section class="board-section panel" id="board-section" aria-label="Task board">
+      <div class="panel-header">
+        <span>Task Board</span>
+        <span class="count" id="board-total">0</span>
+        <span class="right" id="board-plans-summary"></span>
+      </div>
+      <div class="board" id="board"></div>
+    </section>
+
+    <section class="log-section panel" id="log-section" aria-label="Live log">
+      <div class="panel-header">
+        <span>Live Log</span>
+        <span class="right">.claude/state/orchestrator.log · auto-scroll</span>
+      </div>
+      <div class="log" id="log-tail"></div>
+    </section>
+
+    <div class="bottom-row">
+
+      <section class="panel" aria-label="Recent activity">
+        <div class="panel-header">
+          <span>Recent Activity</span>
+          <span class="right">events.jsonl · last 20</span>
+        </div>
+        <div class="activity" id="activity"></div>
+      </section>
+
+      <section class="panel" aria-label="GitHub">
+        <div class="panel-header">
+          <span>GitHub</span>
+          <span class="right">gh · 30s cache</span>
+        </div>
+        <div class="gh" id="github"></div>
+      </section>
+
+    </div>
+
+    <aside class="right-rail" aria-label="Right rail">
+
+      <section class="panel" aria-label="Active workers">
+        <div class="panel-header">
+          <span>Active Workers</span>
+          <span class="count" id="workers-count">0</span>
+        </div>
+        <div id="workers"></div>
+      </section>
+
+      <section class="panel" aria-label="Plan status">
+        <div class="panel-header">
+          <span>Plan Status</span>
+          <span class="right" id="plan-status-header"></span>
+        </div>
+        <div id="plan-status"></div>
+      </section>
+
+      <section class="panel" aria-label="Cost today">
+        <div class="panel-header">
+          <span>Cost (today)</span>
+        </div>
+        <div class="cost-panel" id="cost"></div>
+      </section>
+
+    </aside>
+
+  </div>
+
+  <script src="/static/board.js"></script>
+</body>
+</html>
