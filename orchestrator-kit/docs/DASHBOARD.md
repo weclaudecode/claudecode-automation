@@ -70,11 +70,11 @@ matrix is in `orchestrator-kit/tests/_test_board_api.sh`.
 
 | Column | Source rule |
 |--------|-------------|
-| **Backlog** | Open GH issues labelled `monitor:finding`; plus plans archived with `status: blocked` from unmet `requires:`. |
-| **Todo** | Tasks with `status: pending`. Only column that scrolls (max-height ~360 px). |
-| **In Progress** | Tasks with `status: in_progress`. Worker PID comes from the active-worktree manifest. |
-| **Ready For Review** | `status: in_review`, PR open, no `orch:review-sha:<HEAD>` label yet. |
-| **In Review** | `status: in_review`, PR open, has `orch:review-sha:<HEAD>` AND (`orch:review-blocked` label OR running iterator). |
+| **Backlog** | Open GH issues labelled `monitor:finding`; plus plans archived with `status: blocked`. |
+| **Todo** | Tasks with `status: pending`. The only column that scrolls — height capped via `.col.scroll .col-body` in `board.css`. |
+| **In Progress** | Tasks with `status: in_progress`. |
+| **Ready For Review** | `status: in_review`, PR open, no `orch:review-sha:*` label yet (reviewer hasn't stamped this HEAD). |
+| **In Review** | `status: in_review`, PR open, carries an `orch:review-sha:*` label (reviewer has stamped at least one pass; an iterator may also be running). |
 | **Blocked** | `status: blocked` PLUS in-review tasks where `auto_merge_overrides[N] == false` and the PR carries `orch:needs-robbie` (sensitive flag). |
 | **Done** | `status: merged`. |
 
@@ -84,24 +84,33 @@ not In Review. Note also that the `merged → Done` rule is applied
 already on `main` never flashes through Blocked during the gap between
 `gh pr merge` and the next `sweep-merges` tick.
 
+PID, elapsed, and last-log line for In Progress / iterating tasks
+surface on the right-rail Active Workers panel (`_workers_panel` in
+`api_board.py`), not on the board card itself.
+
 ### Agent identity
 
 Each card carries an avatar so the operator builds per-task memory
 across retries and dashboard restarts.
 
-- **Workers / iterators** — pool of 20 one-word names (Pip, Bento,
-  Nova, Echo, Glitch, Bug, Mochi, Cosmo, Pixel, Spark, Tofu, Otter,
-  Pepper, Patch, Loop, Snap, Tweak, Zog, Boop, Comet) defined in
-  `static/agents.json`. Mapping: `agent_index = md5(plan_slug + ":" +
-  task_num) % 20`. Deterministic — task 3 of PLAN-05 is always the
-  same character. Python's built-in `hash()` is intentionally not used:
-  it is `PYTHONHASHSEED`-randomized and would silently reshuffle every
-  avatar on every dashboard restart.
+- **Workers / iterators** — pool of one-word names defined in
+  `static/agents.json` (currently 20: Pip, Bento, Nova, Echo, Glitch,
+  Bug, Mochi, Cosmo, Pixel, Spark, Tofu, Otter, Pepper, Patch, Loop,
+  Snap, Tweak, Zog, Boop, Comet). Assignment is deterministic — an
+  md5-derived stable hash of `(plan_slug, task_num)` modulo the pool
+  size; see `api_board.py::_stable_hash` and `agent_for_task` for the
+  exact formula. Task 3 of PLAN-05 is always the same character across
+  retries, iterations, and dashboard restarts. Python's built-in
+  `hash()` is intentionally not used: it is `PYTHONHASHSEED`-randomized
+  and would silently reshuffle every avatar on every dashboard restart.
+  Adding or removing a name in `agents.json` reshuffles every existing
+  assignment — a one-time UX cost of growing the roster.
 - **Reviewer** — fixed character **Argus** with a pink DiceBear
-  background, pinned to every In Review card awaiting reviewer verdict.
-  When an iterator picks up after `orch:review-blocked`, the card swaps
-  back to the worker's per-task character (the iterator inherits the
-  worker's identity for continuity).
+  background, pinned to every In Review card. (The SPEC describes a
+  swap-back to the per-task worker character once an iterator picks
+  up; the current implementation in `_agent_for_column` keeps Argus
+  pinned for the whole In Review lifetime. Surfacing the iterator's
+  identity on the card is a backlog UI follow-up.)
 - **Avatars** — DiceBear v8 `bottts` style, fetched from
   `https://api.dicebear.com`. The frontend checks `naturalWidth === 0`
   in the image `onload` handler to detect a CDN error page served with
@@ -116,23 +125,32 @@ column".
 
 ### Cost panel
 
-Headline is **tokens consumed today** (input + output, summed across
-all worker, reviewer, and iterator run files) — the real meter for an
-operator on a Max subscription. The dollar figure is shown as a
-secondary "API-equivalent" line so it stays comparable to a
-pay-per-call deployment but isn't the primary signal. The pricing
-snapshot lives inline in `api_costs.py` with a snapshot-date comment
+Headline today is **notional USD spend across all worker, reviewer,
+and iterator runs**, computed by `api_costs.py::cost_today` from
+per-run usage records stored under `usage.runs[]` in each plan's
+state file. The panel also shows a per-role split (worker / iterator
+/ reviewer), a yesterday comparison, and week-to-date. The pricing
+snapshot is inlined in `api_costs.py` with a snapshot-date comment
 naming the source URL; bump it when Anthropic publishes new rates.
+
+A token-first headline (input / output / cache read / cache write) is
+the eventual design target — `api_costs.py::tokens_today` already
+computes the rollup, and the frontend at `static/board.js` has a
+token-first render branch wired to `cost.today_tokens.total`. The
+board route currently only wires `cost_today()` into the payload, so
+the token branch is dormant until that wiring lands. The Max-plan
+rationale (tokens are the real meter, not USD) still applies.
 
 ### Blocked-card jokes
 
 Blocked cards show a one-line joke from `static/blocked_jokes.json`.
-Rotation key: `md5(plan_slug + ":" + task_num + ":" + utc_date) %
-len(jokes)` — same blocked task shows the same joke today and a
-different one tomorrow, so the page stays animated without churning on
-every 5 s poll. `utc_date` is a required argument to `build_board`
-(not derived from `datetime.now()` inside the builder) so the joke can
-never flip mid-poll at 00:00 UTC.
+The rotation key is a deterministic md5-derived hash of `(plan_slug,
+task_num, utc_date)` modulo the joke pool size — same blocked task
+shows the same joke today and a different one tomorrow, so the page
+stays animated without churning on every 5 s poll. See
+`api_board.py::joke_for_task` for the exact formula. `utc_date` is a
+required argument to `build_board` (not derived from `datetime.now()`
+inside the builder) so the joke can never flip mid-poll at 00:00 UTC.
 
 ### Files added for Mission Centre
 
@@ -146,7 +164,7 @@ never flip mid-poll at 00:00 UTC.
   static/
     board.css             — Mission Centre styles
     board.js              — Mission Centre frontend, polls /api/board every 5 s
-    agents.json           — 20 workers + Argus
+    agents.json           — worker name pool + Argus (the reviewer)
     blocked_jokes.json    — joke pool
 ```
 
@@ -382,7 +400,7 @@ found via `pgrep -f 'dashboard/app.py'`.
       style.css                  — legacy styles
       board.js                   — Mission Centre frontend
       board.css                  — Mission Centre styles
-      agents.json                — 20 worker names + Argus
+      agents.json                — worker name pool + Argus (the reviewer)
       blocked_jokes.json         — joke pool for Blocked-column cards
 
 .claude/state/                    (runtime — gitignored)
