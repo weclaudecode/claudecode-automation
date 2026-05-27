@@ -127,7 +127,7 @@ column".
 
 Headline today is **notional USD spend across all worker, reviewer,
 and iterator runs**, computed by `api_costs.py::cost_today` from
-per-run usage records stored under `usage.runs[]` in each plan's
+per-run usage records stored at `tasks[N].usage.runs[]` in each plan's
 state file. The panel also shows a per-role split (worker / iterator
 / reviewer), a yesterday comparison, and week-to-date. The pricing
 snapshot is inlined in `api_costs.py` with a snapshot-date comment
