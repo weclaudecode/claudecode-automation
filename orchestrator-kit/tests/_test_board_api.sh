@@ -263,6 +263,9 @@ assert card["issue"] == 77
 assert card["click_url"] == "https://example/issues/77", \
     f"click_url should point to the issue: {card}"
 assert card["status"] == "monitor"
+# Column exclusivity — the monitor card must not have leaked anywhere else.
+total = sum(len(v) for v in board.values())
+assert total == 1, f"only the monitor card should exist; got {total} across {board}"
 sys.exit(0)
 PY
   pass "scenario 5 (monitor finding → Backlog)"
@@ -335,6 +338,8 @@ card = board["done"][0]
 assert card.get("cost_usd") is not None, f"cost_usd should be present on Done: {card}"
 assert card["cost_usd"] > 0.0, f"cost_usd should be positive: {card}"
 assert abs(card["cost_usd"] - 0.45) < 0.0001, f"cost_usd should equal direct rollup: {card}"
+total = sum(len(v) for v in board.values())
+assert total == 1, f"only the Done card should exist; got {total} across {board}"
 sys.exit(0)
 PY
   pass "scenario 6 (Done card with run files → positive cost summed across retries)"
@@ -390,6 +395,8 @@ card = board["done"][0]
 # renders that as "—").
 assert card.get("cost_usd") is None, \
     f"cost_usd should be None when there's no usage data: {card}"
+total = sum(len(v) for v in board.values())
+assert total == 1, f"only the Done card should exist; got {total} across {board}"
 sys.exit(0)
 PY
   pass "scenario 7 (Done card without run files → cost_usd null)"
@@ -429,6 +436,8 @@ board = api_board.build_board(
 plans = sorted(c["plan"] for c in board["in_progress"])
 assert plans == ["PLAN-05", "PLAN-06"], \
     f"both plan pills should appear in in_progress column: {plans}"
+total = sum(len(v) for v in board.values())
+assert total == 2, f"exactly 2 cards expected (one per plan); got {total} across {board}"
 sys.exit(0)
 PY
   pass "scenario 8 (two plans render with their respective pills)"
@@ -516,12 +525,27 @@ for _ in range(50):
     again = api_board.agent_for_task("PLAN-05", 3, pool, "worker")
     assert again == first, f"agent assignment drifted: {again} != {first}"
 
-# Different (plan, task) keys should be free to land anywhere; we just
-# verify the function is total over the pool and returns the {name, seed,
-# role} shape.
+# Pinned name — load-bearing. The implementation's docstring picks md5 over
+# Python's built-in hash() because hash() is PYTHONHASHSEED-randomized and
+# would silently break determinism across dashboard restarts. Within a
+# single process both look stable, so a same-process "repeated calls match"
+# check above would NOT catch a md5→hash() swap. Pinning a known expected
+# name does: change the hash function and "Pixel" will become something else.
+assert first["name"] == "Pixel", (
+    f"agent_for_task('PLAN-05', 3) must be 'Pixel' under the pinned md5 "
+    f"hash. If this fails, _stable_hash() likely got replaced by hash() — "
+    f"see the docstring in api_board.py. Got: {first}"
+)
+
+# Distribution sanity — a buggy function that always returned pool[0]
+# would satisfy issubset() above. Require some variety across 20 tasks.
 names = {api_board.agent_for_task("PLAN-05", t, pool, "worker")["name"]
          for t in range(20)}
 assert names.issubset(set(pool)), f"agent names must be drawn from pool: {names - set(pool)}"
+assert len(names) >= 5, (
+    f"agent_for_task should distribute across the pool, not collapse to one "
+    f"name. Got only {len(names)} distinct names across 20 tasks: {names}"
+)
 
 # And iterator role uses the same per-task character as worker role.
 worker_name = api_board.agent_for_task("PLAN-06", 9, pool, "worker")["name"]
