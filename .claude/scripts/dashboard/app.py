@@ -46,14 +46,21 @@ def _discover_blueprints(app: Flask) -> None:
     A broken endpoint module logs and is skipped — the rest of the app
     still serves. This matches the kit's "best-effort phase" convention
     in orchestrator.sh.
+
+    Catch is intentionally broad (`Exception`, not `ImportError`) — endpoint
+    modules can do top-level work (read state files, parse JSON, glob paths)
+    that fails with FileNotFoundError, PermissionError, json.JSONDecodeError,
+    or arbitrary RuntimeError before raising ImportError. The narrow catch
+    would let those propagate and 500 `create_app` entirely, contradicting
+    the "rest of the app still serves" guarantee.
     """
     pattern = str(DASHBOARD_DIR / "api_*.py")
     for path in sorted(glob.glob(pattern)):
         mod_name = Path(path).stem
         try:
             mod = importlib.import_module(f"dashboard.{mod_name}")
-        except ImportError as e:
-            log.warning("dashboard: skipping %s (import failed: %s)", mod_name, e)
+        except Exception as e:  # noqa: BLE001 — defensive boundary
+            log.exception("dashboard: skipping %s (import raised %s)", mod_name, type(e).__name__)
             continue
         bp = getattr(mod, "bp", None)
         if bp is None:
