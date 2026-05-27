@@ -35,6 +35,13 @@ const COLUMN_DEFS = [
    dynamically because its DOM node is rebuilt per render. */
 const SCROLL_PANEL_IDS = ["log-tail", "activity"];
 
+/* Has the dashboard rendered live data at least once this session?
+   When true, transient fetch errors (network blips, 5xx) surface as a
+   stale-dot indicator + an alerts banner WITHOUT wiping the panels.
+   This preserves the operator's last-known-good view across short
+   outages. Reset by renderLoadingState (cold start, 404). */
+let hasRenderedSuccessfully = false;
+
 /* DiceBear avatar palette — used by initials-on-color SVG fallback when
    DiceBear is unreachable. Hash(name) % palette picks a stable color
    per agent so Pip is always pink, Bento is always teal, etc. */
@@ -137,12 +144,18 @@ function renderAvatar(agent) {
   const seed = agent.avatar_seed;
   const isReviewer = agent.role === "reviewer";
   const fallback = fallbackInitialsSvg(agent.name || seed);
-  /* onerror swaps to inline initials SVG if DiceBear is unreachable.
-     this.onerror=null prevents an infinite loop if even the fallback
-     fails to parse. The fallback data-URI is built client-side. */
-  return '<img class="avatar" alt="" loading="lazy"'
+  /* `onerror` covers HTTP-level failures (DNS down, 4xx/5xx, network).
+     `onload` with `naturalWidth === 0` catches the soft-failure case
+     where the CDN responds 200 OK with an HTML error page instead of
+     SVG — without this, the operator sees a broken-image icon and the
+     fallback never fires. Both handlers null themselves out to avoid
+     ping-pong if the fallback data-URI itself fails. */
+  const altText = agent.name ? agent.name + " avatar" : "agent avatar";
+  return '<img class="avatar" loading="lazy"'
+    + ' alt="' + esc(altText) + '"'
     + ' src="' + esc(dicebearUrl(seed, isReviewer)) + '"'
-    + ' onerror="this.onerror=null;this.src=&quot;' + esc(fallback) + '&quot;;">';
+    + ' onerror="this.onerror=null;this.src=&quot;' + esc(fallback) + '&quot;;"'
+    + ' onload="if(this.naturalWidth===0){this.onerror=null;this.src=&quot;' + esc(fallback) + '&quot;;}">';
 }
 
 /* ── Card rendering ────────────────────────────────────────────────────── */
@@ -218,12 +231,27 @@ function renderCard(card) {
   const titleAttr = card.status ? ' title="status: ' + esc(card.status) + '"' : "";
   const url = card.click_url || "";
 
+  /* Screen-reader label: intent + identity + state, in that order.
+     Operators using a screen reader hear what activation does BEFORE
+     the raw button text (which contains decorative emoji and status
+     glyphs that read as noise). */
+  const ariaBits = [];
+  if (card.task != null) ariaBits.push("T" + card.task);
+  if (card.title) ariaBits.push(card.title);
+  if (card.agent && card.agent.name) ariaBits.push("agent " + card.agent.name);
+  if (card.status) ariaBits.push("status " + card.status);
+  if (card.plan) ariaBits.push(card.plan);
+  const ariaLabel = url
+    ? "Open " + ariaBits.join(", ") + " in new tab"
+    : ariaBits.join(", ");
+
   const jokeHtml = (card._column === "blocked" && card.joke)
     ? '<div class="card-joke">' + esc(card.joke) + "</div>"
     : "";
 
   return ''
-    + '<button type="button" class="card' + doneClass + '" data-url="' + esc(url) + '"' + titleAttr + '>'
+    + '<button type="button" class="card' + doneClass + '" data-url="' + esc(url) + '"'
+    +   ' aria-label="' + esc(ariaLabel) + '"' + titleAttr + ">"
     +   '<div class="card-row">'
     +     cardLeading(card)
     +     '<span class="title">' + esc(card.title || "—") + "</span>"
@@ -247,7 +275,7 @@ function renderColumn(def, cards) {
   });
   const body = items.length
     ? items.join("")
-    : '<div class="col-empty">—</div>';
+    : '<div class="col-empty" aria-label="empty column">(none)</div>';
   return ''
     + '<div class="col col-' + esc(def.key) + (def.scroll ? " scroll" : "") + '">'
     +   '<div class="col-header">'
@@ -514,23 +542,66 @@ function logShouldStickToBottom(el) {
   return remaining < 8;
 }
 
+/* ── Focus preservation ────────────────────────────────────────────────── */
+
+function snapshotFocus() {
+  /* Cards and GH rows are the only focusable interactive elements that
+     get wiped per render — they all carry data-url. We key by data-url
+     so the post-render lookup re-focuses the SAME logical card even if
+     its DOM node changed. activeElement.tagName === "BODY" means no
+     interactive focus to preserve. */
+  const a = document.activeElement;
+  if (!a || a === document.body || !a.getAttribute) return null;
+  const url = a.getAttribute("data-url");
+  return url ? { dataUrl: url } : null;
+}
+
+function restoreFocus(snap) {
+  if (!snap || !snap.dataUrl) return;
+  /* CSS.escape isn't bulletproof for attribute selectors with special
+     chars — fall back to a manual scan if the lookup throws. */
+  let target = null;
+  try {
+    const sel = '[data-url="' + (window.CSS && CSS.escape ? CSS.escape(snap.dataUrl) : snap.dataUrl) + '"]';
+    target = document.querySelector(sel);
+  } catch (e) {
+    target = null;
+  }
+  if (!target) {
+    const all = document.querySelectorAll("[data-url]");
+    for (const el of all) {
+      if (el.getAttribute("data-url") === snap.dataUrl) { target = el; break; }
+    }
+  }
+  if (target && typeof target.focus === "function") {
+    /* preventScroll keeps the snapshot/restore scroll dance authoritative. */
+    target.focus({ preventScroll: true });
+  }
+}
+
 /* ── Click delegation ──────────────────────────────────────────────────── */
 
 function onClickDelegate(ev) {
   /* Single delegated handler — cards and GH rows expose data-url.
      window.open(_blank) opens in a new tab regardless of which inner
-     element fired (button text vs the button itself). */
+     element fired. */
   const t = ev.target.closest("[data-url]");
   if (!t) return;
   const url = t.getAttribute("data-url");
   if (!url) return;
-  window.open(url, "_blank", "noopener");
+  /* Defense-in-depth — backend SHOULD sanitize click_url, but the
+     dashboard is reachable on localhost where any compromise of the
+     state file or gh data could plant a `javascript:` URL. Restrict
+     to http(s) absolute URLs and same-origin relative paths. */
+  if (!/^(https?:\/\/|\/)/i.test(url)) return;
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 /* ── Top-level render ──────────────────────────────────────────────────── */
 
 function renderAll(payload) {
   const snap = snapshotScroll();
+  const focusSnap = snapshotFocus();
   const logEl = $("log-tail");
   const stickLog = logShouldStickToBottom(logEl);
 
@@ -572,19 +643,44 @@ function renderAll(payload) {
   if (stickLog && logEl) {
     logEl.scrollTop = logEl.scrollHeight;
   }
+  restoreFocus(focusSnap);
+  hasRenderedSuccessfully = true;
 }
 
 function renderLoadingState(message) {
   /* Used on first paint and on /api/board 404 (T6 hasn't wired the
      blueprint yet). Keeps the panel chrome visible so the operator
-     sees the dashboard is up and just needs the endpoint live. */
-  $("board").innerHTML = '<div class="global-loading">' + esc(message) + "</div>";
-  $("workers").innerHTML = "";
-  $("plan-status").innerHTML = "";
-  $("cost").innerHTML = "";
-  $("log-tail").innerHTML = "";
-  $("activity").innerHTML = "";
-  $("github").innerHTML = "";
+     sees the dashboard is up and just needs the endpoint live.
+     Resets the rendered-once flag so the next fetch failure can't be
+     treated as "transient" — the panels are already empty. */
+  const boardEl = $("board");
+  if (boardEl) {
+    while (boardEl.firstChild) boardEl.removeChild(boardEl.firstChild);
+    const loadingDiv = document.createElement("div");
+    loadingDiv.className = "global-loading";
+    loadingDiv.textContent = String(message || "");
+    boardEl.appendChild(loadingDiv);
+  }
+  for (const id of ["workers", "plan-status", "cost", "log-tail", "activity", "github"]) {
+    const el = $(id);
+    if (el) while (el.firstChild) el.removeChild(el.firstChild);
+  }
+  hasRenderedSuccessfully = false;
+}
+
+function renderTransientError(message) {
+  /* Transient failure path — keep the last-known-good DOM intact, just
+     flag the live-dot stale and surface the failure in the alerts strip.
+     One 5xx or a network blip mustn't blank the operator's entire view. */
+  setLiveDotStale(true);
+  const strip = $("alerts-strip");
+  if (!strip) return;
+  strip.hidden = false;
+  while (strip.firstChild) strip.removeChild(strip.firstChild);
+  const row = document.createElement("div");
+  row.className = "a err";
+  row.textContent = "❗ fetch failed (showing stale data): " + String(message || "");
+  strip.appendChild(row);
 }
 
 function setLiveDotStale(stale) {
@@ -599,8 +695,9 @@ async function pollOnce() {
   try {
     const res = await fetch(ENDPOINT, { cache: "no-store" });
     if (res.status === 404) {
-      /* T6 hasn't wired the blueprint yet — the rest of the dashboard
-         is functional; just tell the operator the endpoint is pending. */
+      /* T6 hasn't wired the blueprint yet — operator sees the chrome +
+         a pending message. Wipe panels because the endpoint is genuinely
+         not available, not just transiently failing. */
       setLiveDotStale(true);
       renderLoadingState("Mission Centre endpoint /api/board not yet wired (T6 pending).");
       return;
@@ -613,16 +710,27 @@ async function pollOnce() {
       setLiveDotStale(false);
       renderAll(envelope.data);
     } else if (envelope && envelope.error) {
-      setLiveDotStale(true);
-      renderLoadingState("endpoint error: " + envelope.error);
+      /* Backend explicitly returned an error envelope. Treat as transient
+         if we've shown data before — operator keeps last-known-good. */
+      if (hasRenderedSuccessfully) {
+        renderTransientError("endpoint error: " + envelope.error);
+      } else {
+        renderLoadingState("endpoint error: " + envelope.error);
+      }
     } else {
-      setLiveDotStale(true);
-      renderLoadingState("unexpected response shape");
+      if (hasRenderedSuccessfully) {
+        renderTransientError("unexpected response shape");
+      } else {
+        renderLoadingState("unexpected response shape");
+      }
     }
   } catch (err) {
-    setLiveDotStale(true);
     const msg = (err && err.message) ? err.message : String(err);
-    renderLoadingState("fetch failed: " + msg);
+    if (hasRenderedSuccessfully) {
+      renderTransientError(msg);
+    } else {
+      renderLoadingState("fetch failed: " + msg);
+    }
   }
 }
 

@@ -21,7 +21,7 @@
     </div>
   </div>
 
-  <div class="alerts" id="alerts-strip" hidden></div>
+  <div class="alerts" id="alerts-strip" role="alert" aria-live="assertive" hidden></div>
 
   <div class="main">
 
@@ -39,7 +39,7 @@
         <span>Live Log</span>
         <span class="right">.claude/state/orchestrator.log · auto-scroll</span>
       </div>
-      <div class="log" id="log-tail"></div>
+      <div class="log" id="log-tail" aria-live="polite" aria-atomic="false"></div>
     </section>
 
     <div class="bottom-row">
@@ -49,7 +49,7 @@
           <span>Recent Activity</span>
           <span class="right">events.jsonl · last 20</span>
         </div>
-        <div class="activity" id="activity"></div>
+        <div class="activity" id="activity" aria-live="polite" aria-atomic="false"></div>
       </section>
 
       <section class="panel" aria-label="GitHub">

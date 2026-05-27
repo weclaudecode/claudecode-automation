@@ -10,7 +10,9 @@
   --border: #2d333b;
   --text: #e6edf3;
   --text-dim: #8b949e;
-  --text-faint: #6e7681;
+  /* Bumped from #6e7681 to clear WCAG AA 4.5:1 contrast on --panel. The
+     prior value yielded 3.4:1; #8b949e yields ~5.2:1. */
+  --text-faint: #8b949e;
 
   --col-backlog:   #6e7681;
   --col-todo:      #58a6ff;
@@ -555,4 +557,24 @@ a { color: inherit; text-decoration: none; }
   padding: 40px;
   text-align: center;
   color: var(--text-dim);
+}
+
+/* Respect operator preference for reduced motion — disables hover
+   transitions, focus ring animations, and any future motion. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* Stale state — the live dot turns red and dims when a fetch fails.
+   Used by the transient-error path so the operator sees "stale" without
+   losing the last-known-good data underneath. */
+.nav .meta.stale .dot {
+  background: var(--col-blocked);
+  box-shadow: 0 0 6px var(--col-blocked);
+}
+.nav .meta.stale {
+  color: var(--col-blocked);
 }
