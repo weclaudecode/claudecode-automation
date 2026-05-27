@@ -23,6 +23,7 @@ from flask import Flask, jsonify, send_from_directory
 
 DASHBOARD_DIR = Path(__file__).resolve().parent
 STATIC_DIR = DASHBOARD_DIR / "static"
+TEMPLATES_DIR = DASHBOARD_DIR / "templates"
 
 log = logging.getLogger("dashboard")
 
@@ -45,14 +46,21 @@ def _discover_blueprints(app: Flask) -> None:
     A broken endpoint module logs and is skipped — the rest of the app
     still serves. This matches the kit's "best-effort phase" convention
     in orchestrator.sh.
+
+    Catch is intentionally broad (`Exception`, not `ImportError`) — endpoint
+    modules can do top-level work (read state files, parse JSON, glob paths)
+    that fails with FileNotFoundError, PermissionError, json.JSONDecodeError,
+    or arbitrary RuntimeError before raising ImportError. The narrow catch
+    would let those propagate and 500 `create_app` entirely, contradicting
+    the "rest of the app still serves" guarantee.
     """
     pattern = str(DASHBOARD_DIR / "api_*.py")
     for path in sorted(glob.glob(pattern)):
         mod_name = Path(path).stem
         try:
             mod = importlib.import_module(f"dashboard.{mod_name}")
-        except ImportError as e:
-            log.warning("dashboard: skipping %s (import failed: %s)", mod_name, e)
+        except Exception as e:  # noqa: BLE001 — defensive boundary
+            log.exception("dashboard: skipping %s (import raised %s)", mod_name, type(e).__name__)
             continue
         bp = getattr(mod, "bp", None)
         if bp is None:
@@ -75,12 +83,28 @@ def create_app(host: str = "127.0.0.1") -> Flask:
         return jsonify(json_envelope(data={"ok": True}))
 
     @app.route("/")
-    def index():
+    def mission_centre():
+        # PLAN-06 T6: Mission Centre is the new default landing page.
+        # T5 (board.html/css/js) drives the unified view via /api/board.
+        board_path = TEMPLATES_DIR / "board.html"
+        if not board_path.exists():
+            return (
+                "<h1>dashboard up — Mission Centre frontend not installed</h1>"
+                "<p>see /dashboard for the legacy 6-panel view, /api/healthz for status</p>",
+                200,
+            )
+        return send_from_directory(str(TEMPLATES_DIR), "board.html")
+
+    @app.route("/dashboard")
+    def legacy_dashboard():
+        # Legacy 6-panel view, served at /dashboard since T6. Operators
+        # who prefer the older layout (and the routine workflows that
+        # bookmarked /) reach it here.
         index_path = STATIC_DIR / "index.html"
         if not index_path.exists():
             return (
-                "<h1>dashboard up — frontend not yet installed</h1>"
-                "<p>see /api/healthz</p>",
+                "<h1>dashboard up — legacy frontend not installed</h1>"
+                "<p>see / for Mission Centre, /api/healthz for status</p>",
                 200,
             )
         return send_from_directory(str(STATIC_DIR), "index.html")
