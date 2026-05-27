@@ -1,34 +1,26 @@
 """GET /api/board — unified Mission Centre payload composer.
 
-The endpoint single-shots the entire Mission Centre view: 7-column kanban
-board, Active Workers, Plan Status, cost rollup, live log tail, recent
-activity, and GitHub panel. Frontend (T5) polls this every 5 s.
+Single endpoint backing the entire Mission Centre view: 7-column kanban
+board, Active Workers panel, Plan Status, cost rollup, log tail, recent
+activity, and GitHub panel. Frontend polls this every 5 s.
 
 Architecture
 ------------
 Pure column-builder `build_board(active_states, archived_states, gh_issues,
-gh_prs, pr_labels, pr_heads, workers_pool, jokes_pool, cost_fn, utc_date)`
-is the testable seam — no IO inside. The Flask route is thin glue that
-loads each data source under try/except, records partial failures in an
-`errors` array (which the frontend renders as per-panel "data unavailable"
-banners), and hands clean inputs to `build_board`.
+gh_prs, pr_labels, workers_pool, jokes_pool, *, cost_fn, utc_date)` is the
+testable seam — no IO inside. The Flask route is thin glue that loads
+each source under try/except, records partial failures in an `errors`
+array (the frontend renders per-panel "data unavailable" banners), and
+hands clean inputs to `build_board`.
 
-Agent identity (acceptance: "same (plan, task) returns the same agent
-across calls"). Uses `hashlib.md5` not Python's built-in `hash()` —
-the latter is PYTHONHASHSEED-randomized, so a dashboard restart would
-silently reshuffle every avatar. Argus is hard-pinned to the reviewer
-role per spec.
+Determinism — see `_stable_hash` for why we use md5 instead of Python's
+built-in `hash()`. Column precedence — sensitive in-review tasks land
+in Blocked, ahead of the in_review branching. Merged-but-not-yet-swept
+PRs land in Done, ahead of the closed-PR branching.
 
-Column precedence (acceptance: "sensitive-flagged in-review tasks land
-in Blocked"). The sensitive-in-review check runs before the in_review
-branching, so a `auto_merge_overrides[N] == false` task with the
-`orch:needs-robbie` label is routed to Blocked even if its PR would
-otherwise qualify for In Review.
-
-PR labels are fetched via `gh pr list --json number,labels,headRefOid`
-with a 30 s in-memory cache. We can't piggyback the existing
-api_github._fetch_payload because its PR query doesn't request labels —
-and PLAN-06 T4 touches restrict edits to api_board.py.
+PR labels come from `gh pr list --json number,labels` with a 30 s
+in-memory cache. The existing api_github cache doesn't request labels
+and changing its query shape isn't worth the blast radius.
 """
 
 from __future__ import annotations
@@ -69,9 +61,10 @@ _GH_TIMEOUT_SECONDS = 10
 _EVENTS_TAIL_LINES = 20
 _LOG_TAIL_LINES = 40
 
-# Match plan slug out of a branch like 'claude/plan-06-task-3' → '06'.
+_DEFAULT_LOG_PATH = Path(".claude/state/orchestrator.log")
+_DEFAULT_EVENTS_PATH = Path(".claude/state/events.jsonl")
+
 _BRANCH_PLAN_RE = re.compile(r"plan-(\d+)")
-# Extract HH:MM:SS from a log line if present (for log_tail ts).
 _LOG_TIME_RE = re.compile(r"\b(\d{2}:\d{2}:\d{2})\b")
 
 
@@ -115,9 +108,14 @@ def joke_for_task(
 
 # ── Static asset loaders (agents.json, blocked_jokes.json) ────────────────
 
-def _load_agents_and_jokes() -> tuple[list[str], list[str], str | None]:
-    # The static dir sits next to this module. We also look in the cwd's
-    # dashboard tree as a fallback so tests can stub via a tmpdir.
+def _load_agents_and_jokes() -> tuple[list[str], list[str], list[str]]:
+    """Return (workers, jokes, errors).
+
+    `errors` is a list of human-readable strings (zero or more) — agents
+    and jokes can fail independently, so a single optional string would
+    drop one when both surface.
+    """
+    # CWD fallback exists so tests can stub static/ via a tmpdir.
     candidates = [
         Path(__file__).resolve().parent / "static",
         Path(".claude/scripts/dashboard/static"),
@@ -125,7 +123,9 @@ def _load_agents_and_jokes() -> tuple[list[str], list[str], str | None]:
     ]
     static_dir = next((p for p in candidates if (p / "agents.json").is_file()), None)
     if static_dir is None:
-        return [], [], "static/agents.json not found"
+        return [], [], ["static/agents.json not found"]
+
+    errors: list[str] = []
     try:
         with (static_dir / "agents.json").open("r", encoding="utf-8") as f:
             agents = json.load(f)
@@ -134,7 +134,7 @@ def _load_agents_and_jokes() -> tuple[list[str], list[str], str | None]:
             if isinstance(a, dict) and a.get("role") == "worker" and isinstance(a.get("name"), str)
         ]
     except (OSError, ValueError) as e:
-        return [], [], f"agents.json: {type(e).__name__}: {e}"
+        return [], [], [f"agents.json: {type(e).__name__}: {e}"]
 
     jokes: list[str] = []
     jokes_file = static_dir / "blocked_jokes.json"
@@ -144,9 +144,12 @@ def _load_agents_and_jokes() -> tuple[list[str], list[str], str | None]:
                 data = json.load(f)
             if isinstance(data, list):
                 jokes = [j for j in data if isinstance(j, str)]
-        except (OSError, ValueError):
+        except (OSError, ValueError) as e:
+            msg = f"blocked_jokes.json: {type(e).__name__}: {e}"
+            log.warning("api_board: %s", msg)
+            errors.append(msg)
             jokes = []
-    return workers, jokes, None
+    return workers, jokes, errors
 
 
 # ── State file loaders ─────────────────────────────────────────────────────
@@ -190,59 +193,69 @@ def _plan_slug_full(state: dict) -> str:
     return Path(state.get("plan_file") or "").stem
 
 
-# ── GH PR labels + head fetcher (30 s cache) ──────────────────────────────
+# ── GH PR labels fetcher (30 s cache) ─────────────────────────────────────
 
 _pr_meta_lock = threading.Lock()
-_pr_meta_cache: tuple[float, dict[int, list[str]], dict[int, str]] | None = None
+# Cache entry: (mono_time, labels_by_pr). Error responses cache an empty
+# dict so an outage doesn't re-shell `gh` on every 5 s frontend poll.
+_pr_meta_cache: tuple[float, dict[int, list[str]]] | None = None
 
 
-def _fetch_pr_labels_and_heads() -> tuple[dict[int, list[str]], dict[int, str], str | None]:
-    """Open PRs only — labels list and head SHA per PR number.
-
-    The existing api_github cache doesn't request labels (its PR query
-    is locked to a fixed --json field set we can't extend without
-    touching api_github.py, which isn't in T4's touches). Separate
-    cache here keyed on monotonic time; 30 s TTL matches api_github.
-    """
+def _fetch_pr_labels() -> tuple[dict[int, list[str]], str | None]:
+    """Open PRs only → labels list per PR number."""
     global _pr_meta_cache
     now = time.monotonic()
     with _pr_meta_lock:
         if _pr_meta_cache and (now - _pr_meta_cache[0]) < _PR_LABEL_CACHE_TTL_SECONDS:
-            _, labels, heads = _pr_meta_cache
-            return labels, heads, None
+            return _pr_meta_cache[1], None
+
+        err: str | None = None
+        labels_by_pr: dict[int, list[str]] = {}
         try:
             proc = subprocess.run(
                 ["gh", "pr", "list", "--state", "open", "--limit", "50",
-                 "--json", "number,labels,headRefOid"],
+                 "--json", "number,labels"],
                 capture_output=True, text=True, timeout=_GH_TIMEOUT_SECONDS,
             )
         except FileNotFoundError:
-            return {}, {}, "gh CLI not found on PATH"
+            err = "gh CLI not found on PATH"
         except subprocess.TimeoutExpired:
-            return {}, {}, f"gh pr list timed out after {_GH_TIMEOUT_SECONDS}s"
-        if proc.returncode != 0:
-            return {}, {}, (proc.stderr or proc.stdout).strip()[:500]
-        try:
-            data = json.loads(proc.stdout or "[]")
-        except json.JSONDecodeError as e:
-            return {}, {}, f"gh output parse: {e}"
-        labels_by_pr: dict[int, list[str]] = {}
-        heads_by_pr: dict[int, str] = {}
-        for pr in data:
-            if not isinstance(pr, dict):
-                continue
-            num = pr.get("number")
-            if not isinstance(num, int):
-                continue
-            labels_by_pr[num] = [
-                lbl.get("name", "") for lbl in (pr.get("labels") or [])
-                if isinstance(lbl, dict)
-            ]
-            head = pr.get("headRefOid") or ""
-            if isinstance(head, str) and head:
-                heads_by_pr[num] = head
-        _pr_meta_cache = (now, labels_by_pr, heads_by_pr)
-        return labels_by_pr, heads_by_pr, None
+            err = f"gh pr list timed out after {_GH_TIMEOUT_SECONDS}s"
+        else:
+            if proc.returncode != 0:
+                err = (proc.stderr or proc.stdout).strip()[:500]
+            else:
+                try:
+                    data = json.loads(proc.stdout or "[]")
+                except json.JSONDecodeError as e:
+                    err = f"gh output parse: {e}"
+                else:
+                    for pr in data:
+                        if not isinstance(pr, dict):
+                            continue
+                        num = pr.get("number")
+                        if not isinstance(num, int):
+                            continue
+                        labels_by_pr[num] = [
+                            lbl.get("name", "") for lbl in (pr.get("labels") or [])
+                            if isinstance(lbl, dict)
+                        ]
+
+        # Always populate the cache — even on error — so a `gh` outage
+        # doesn't re-shell the CLI on every poll within the TTL window.
+        # On error we cache an empty dict; callers see no labels and
+        # the column-builder falls through to label-free placements.
+        _pr_meta_cache = (now, labels_by_pr)
+        if err:
+            log.warning("api_board: pr labels fetch failed: %s", err)
+        return labels_by_pr, err
+
+
+# Test hook — pytest/T7 can call this between scenarios to drop the cache.
+def _reset_pr_label_cache() -> None:
+    global _pr_meta_cache
+    with _pr_meta_lock:
+        _pr_meta_cache = None
 
 
 # ── Column placement (pure) ───────────────────────────────────────────────
@@ -250,13 +263,20 @@ def _fetch_pr_labels_and_heads() -> tuple[dict[int, list[str]], dict[int, str], 
 def _column_for_task(
     task: dict,
     pr_open: bool,
+    pr_merged: bool,
     pr_labels: list[str],
     sensitive: bool,
 ) -> str | None:
-    """Map FSM status × PR state × labels → column name. None = skip."""
+    """Map FSM status × PR state × labels → column name. None = skip.
+
+    `pr_merged` distinguishes "PR closed-as-merged" (race with sweep-merges)
+    from "PR closed-unmerged" (genuine failure). The former routes to Done;
+    the latter routes to Blocked. Without this distinction, every PR briefly
+    flashes through Blocked between gh-merge and the next orchestrator tick.
+    """
     status = task.get("status")
 
-    # Precedence: sensitive in-review with the needs-robbie sentinel
+    # Precedence 1: sensitive in-review with the needs-robbie sentinel
     # ALWAYS lands in Blocked, even if its PR would otherwise qualify
     # for Ready For Review or In Review.
     if status == "in_review" and sensitive and pr_open and "orch:needs-robbie" in pr_labels:
@@ -271,9 +291,14 @@ def _column_for_task(
     if status == "blocked":
         return "blocked"
     if status == "in_review":
+        # Precedence 2: a closed-as-merged PR is the success path even if
+        # the FSM hasn't flipped yet — race window between `gh pr merge`
+        # and orchestrator's sweep-merges.
+        if pr_merged:
+            return "done"
         if not pr_open:
-            # PR closed but task still in_review — orchestrator should
-            # have flipped this to blocked, but be defensive.
+            # Closed-unmerged with state still in_review — defensive fallback;
+            # orchestrator should have transitioned to blocked.
             return "blocked"
         has_review_sha = any(lbl.startswith("orch:review-sha:") for lbl in pr_labels)
         return "in_review" if has_review_sha else "ready_for_review"
@@ -285,20 +310,12 @@ def _column_for_task(
 def _agent_for_column(
     column: str, plan_slug: str, task_n: int, workers_pool: list[str],
 ) -> dict | None:
-    # Spec § "Agent role per column":
-    #   Backlog/Todo     → null (issue/dep icon instead)
-    #   In Progress      → worker (per-task character)
-    #   Ready For Review → worker (same character — just finished)
-    #   In Review        → reviewer (Argus)
-    #   Blocked          → worker (per-task character + joke pill)
-    #   Done             → null/worker muted (passenger)
+    # Reviewer column → Argus (hard-pinned). Done column → worker agent
+    # rendered muted by frontend. Backlog/Todo have no per-task agent.
     if column in ("backlog", "todo"):
         return None
     if column == "in_review":
         return agent_for_task(plan_slug, task_n, workers_pool, "reviewer")
-    if column == "done":
-        # spec calls out "muted passenger" rendering; frontend grays it.
-        return agent_for_task(plan_slug, task_n, workers_pool, "worker")
     return agent_for_task(plan_slug, task_n, workers_pool, "worker")
 
 
@@ -354,24 +371,27 @@ def build_board(
     gh_issues: list[dict],
     gh_prs: list[dict],
     pr_labels: dict[int, list[str]],
-    pr_heads: dict[int, str],
     workers_pool: list[str],
     jokes_pool: list[str],
+    *,
     cost_fn: Callable[[str, int], float] | None = None,
-    utc_date: str | None = None,
+    utc_date: str,
 ) -> dict[str, list[dict]]:
-    """Pure column-builder — no IO. Tests pass synthetic inputs."""
+    """Pure column-builder — no IO. Tests pass synthetic inputs.
+
+    `utc_date` is required (not defaulted) so the caller is responsible
+    for time. A pure function that called `datetime.now()` itself would
+    re-introduce hidden state and could flip the daily joke mid-poll
+    if a request straddled 00:00 UTC.
+    """
     if cost_fn is None:
         cost_fn = cost_for_task
-    if utc_date is None:
-        utc_date = _dt.datetime.now(_dt.timezone.utc).date().isoformat()
 
     board: dict[str, list[dict]] = {c: [] for c in _COLUMN_NAMES}
 
     prs_by_num = {p.get("number"): p for p in gh_prs if isinstance(p.get("number"), int)}
     issues_by_num = {i.get("number"): i for i in gh_issues if isinstance(i.get("number"), int)}
 
-    # Task cards from active + archived state files
     for _path, state in [*active_states, *archived_states]:
         plan_short = _plan_slug_short(state)
         overrides = state.get("auto_merge_overrides") or {}
@@ -386,13 +406,13 @@ def build_board(
 
             pr_num = t.get("pr")
             pr_obj = prs_by_num.get(pr_num) if isinstance(pr_num, int) else None
-            pr_open = bool(
-                pr_obj and (pr_obj.get("state") in (None, "", "OPEN"))
-                and not pr_obj.get("merged_at")
-            )
+            pr_state = (pr_obj or {}).get("state") if pr_obj else None
+            pr_merged_at = (pr_obj or {}).get("merged_at") if pr_obj else None
+            pr_merged = bool(pr_obj and (pr_state == "MERGED" or pr_merged_at))
+            pr_open = bool(pr_obj and pr_state == "OPEN" and not pr_merged)
             labels = pr_labels.get(pr_num, []) if isinstance(pr_num, int) else []
 
-            column = _column_for_task(t, pr_open, labels, sensitive)
+            column = _column_for_task(t, pr_open, pr_merged, labels, sensitive)
             if column is None:
                 continue
 
@@ -401,7 +421,15 @@ def build_board(
                 try:
                     c = cost_fn(plan_short, task_num)
                     cost_usd = float(c) if c else None
-                except Exception:
+                except Exception as e:  # noqa: BLE001 — defensive boundary
+                    # Don't fail the entire board over one bad cost lookup,
+                    # but DO log so the operator can diagnose null-cost
+                    # cards from dashboard.log. Otherwise Done cards
+                    # silently show "—" with no breadcrumb.
+                    log.warning(
+                        "api_board: cost_fn failed for %s/%s: %s: %s",
+                        plan_short, task_num, type(e).__name__, e,
+                    )
                     cost_usd = None
 
             pr_url = pr_obj.get("url") if pr_obj else None
@@ -498,7 +526,7 @@ def _plan_status_panel(active_states: list[tuple[str, dict]]) -> list[dict]:
     for _, st in active_states:
         if st.get("status") != "in_progress":
             continue
-        counts = {"merged": 0, "in_progress": 0, "in_review": 0, "pending": 0, "blocked": 0}
+        counts: dict[str, int] = {}
         total = 0
         for t in (st.get("tasks") or {}).values():
             if not isinstance(t, dict):
@@ -531,15 +559,23 @@ def _classify_log_line(line: str) -> str:
     return "line"
 
 
-def _log_tail(n: int = _LOG_TAIL_LINES) -> list[dict]:
-    p = Path(".claude/state/orchestrator.log")
+def _log_tail(
+    n: int = _LOG_TAIL_LINES, path: Path | None = None,
+) -> tuple[list[dict], str | None]:
+    """Return (lines, error). Empty list + None means "log file empty";
+    empty list + error string means "read failed" — without this split
+    the frontend can't distinguish a quiet orchestrator from a broken one.
+    """
+    p = path or _DEFAULT_LOG_PATH
     if not p.is_file():
-        return []
+        return [], None
     try:
         with p.open("r", encoding="utf-8", errors="replace") as f:
             raw = f.readlines()
-    except OSError:
-        return []
+    except OSError as e:
+        msg = f"{p}: {type(e).__name__}: {e}"
+        log.warning("api_board: log_tail read failed: %s", msg)
+        return [], msg
     out: list[dict] = []
     for line in raw[-n:]:
         line = line.rstrip("\n")
@@ -549,19 +585,24 @@ def _log_tail(n: int = _LOG_TAIL_LINES) -> list[dict]:
             "text": line,
             "kind": _classify_log_line(line),
         })
-    return out
+    return out, None
 
 
-def _activity_tail(n: int = _EVENTS_TAIL_LINES) -> list[dict]:
-    p = Path(".claude/state/events.jsonl")
+def _activity_tail(
+    n: int = _EVENTS_TAIL_LINES, path: Path | None = None,
+) -> tuple[list[dict], str | None]:
+    p = path or _DEFAULT_EVENTS_PATH
     if not p.is_file():
-        return []
+        return [], None
     try:
         with p.open("r", encoding="utf-8", errors="replace") as f:
             raw = f.readlines()
-    except OSError:
-        return []
+    except OSError as e:
+        msg = f"{p}: {type(e).__name__}: {e}"
+        log.warning("api_board: activity_tail read failed: %s", msg)
+        return [], msg
     out: list[dict] = []
+    skipped = 0
     for line in reversed(raw):
         if len(out) >= n:
             break
@@ -571,8 +612,10 @@ def _activity_tail(n: int = _EVENTS_TAIL_LINES) -> list[dict]:
         try:
             ev = json.loads(line)
         except json.JSONDecodeError:
+            skipped += 1
             continue
         if not isinstance(ev, dict):
+            skipped += 1
             continue
         ts_iso = ev.get("ts", "")
         ts_short = ts_iso[11:19] if isinstance(ts_iso, str) and len(ts_iso) >= 19 else ts_iso
@@ -582,7 +625,9 @@ def _activity_tail(n: int = _EVENTS_TAIL_LINES) -> list[dict]:
             "kind": ev.get("event", "unknown"),
             "detail": json.dumps(extras, default=str) if extras else "",
         })
-    return out
+    if skipped:
+        log.debug("api_board: activity_tail skipped %d malformed lines in %s", skipped, p)
+    return out, None
 
 
 def _github_panel(gh_issues: list[dict], gh_prs: list[dict]) -> dict:
@@ -614,12 +659,12 @@ def _github_panel(gh_issues: list[dict], gh_prs: list[dict]) -> dict:
 def board_endpoint():
     errors: list[dict] = []
 
-    workers_pool, jokes_pool, agents_err = _load_agents_and_jokes()
-    if agents_err:
+    workers_pool, jokes_pool, asset_errs = _load_agents_and_jokes()
+    for msg in asset_errs:
         errors.append({
             "source": "agents",
-            "message": agents_err,
-            "suggestion": "ensure static/agents.json exists next to api_board.py",
+            "message": msg,
+            "suggestion": "ensure static/agents.json + blocked_jokes.json exist next to api_board.py",
         })
 
     active_states, archived_states, state_errs = _read_state_files()
@@ -630,6 +675,7 @@ def board_endpoint():
             "suggestion": "validate .claude/plans/*.state.json with `python -m json.tool`",
         })
 
+    # api_github contract: returns (None, err) on failure, (dict, None) on success.
     gh_data, gh_err = _gh_fetch_payload()
     if gh_err:
         errors.append({
@@ -643,7 +689,7 @@ def board_endpoint():
         gh_issues_raw = (gh_data or {}).get("open_issues", []) or []
         gh_prs_raw = (gh_data or {}).get("recent_prs", []) or []
 
-    pr_labels, pr_heads, labels_err = _fetch_pr_labels_and_heads()
+    pr_labels, labels_err = _fetch_pr_labels()
     if labels_err:
         errors.append({
             "source": "github_labels",
@@ -653,7 +699,7 @@ def board_endpoint():
 
     try:
         worktrees = _list_worktrees_for_board()
-    except Exception as e:  # noqa: BLE001 — defensive boundary
+    except Exception as e:  # noqa: BLE001 — defensive boundary across module
         errors.append({
             "source": "worktrees",
             "message": f"{type(e).__name__}: {e}",
@@ -661,11 +707,16 @@ def board_endpoint():
         })
         worktrees = []
 
+    # Compute utc_date once per request so panels that depend on it
+    # (joke rotation) all see the same value.
+    utc_date = _dt.datetime.now(_dt.timezone.utc).date().isoformat()
+
     board = build_board(
         active_states, archived_states,
         gh_issues_raw, gh_prs_raw,
-        pr_labels, pr_heads,
+        pr_labels,
         workers_pool, jokes_pool,
+        utc_date=utc_date,
     )
 
     try:
@@ -678,14 +729,30 @@ def board_endpoint():
         })
         cost = {}
 
+    log_lines, log_err = _log_tail()
+    if log_err:
+        errors.append({
+            "source": "log_tail",
+            "message": log_err,
+            "suggestion": "check .claude/state/orchestrator.log permissions",
+        })
+
+    activity_lines, activity_err = _activity_tail()
+    if activity_err:
+        errors.append({
+            "source": "activity",
+            "message": activity_err,
+            "suggestion": "check .claude/state/events.jsonl permissions",
+        })
+
     payload = {
         "as_of": _dt.datetime.now(_dt.timezone.utc).isoformat(),
         "board": board,
         "workers": _workers_panel(worktrees, active_states, workers_pool),
         "plan_status": _plan_status_panel(active_states),
         "cost": cost,
-        "log_tail": _log_tail(),
-        "activity": _activity_tail(),
+        "log_tail": log_lines,
+        "activity": activity_lines,
         "github": _github_panel(gh_issues_raw, gh_prs_raw),
         "errors": errors,
     }
