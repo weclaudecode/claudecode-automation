@@ -650,6 +650,102 @@ else
   fail "scenario 12 (in_review with pr_obj None)"
 fi
 
+# ─── Scenario 13: pr-label cache surfaces gh err on every TTL-window poll ─
+# Regression for PLAN-07 T2: when `gh pr list --json number,labels` fails,
+# the prior implementation cached only (timestamp, labels_dict) and dropped
+# `err` on cache hits — so the `errors[]` channel surfaced the outage on
+# the first poll and went silent for the next 30 s, even though the
+# fetcher kept returning an empty labels dict. Operators looking at the
+# dashboard saw the warning banner clear while sensitive in-review tasks
+# could still migrate out of Blocked due to absent labels. The fix widens
+# the cache to (timestamp, labels_dict, err) and returns the cached err
+# on every hit until the next successful refetch clears it.
+echo "--- 13: pr-label cache returns cached err on every poll within TTL ---"
+if KIT_SCRIPTS_DIR="$KIT_SCRIPTS_DIR" run_py <<'PY'; then
+import os, sys, subprocess
+sys.path.insert(0, os.environ["KIT_SCRIPTS_DIR"])
+from dashboard import api_board
+
+# Start from a clean cache so the first poll forces a fetch.
+api_board._reset_pr_label_cache()
+
+# Fake subprocess.run so we can deterministically toggle gh success/failure.
+# The fetcher only ever calls subprocess.run with `gh pr list ...` here; an
+# argv-shape check keeps the stub from silently shadowing unrelated calls if
+# the fetcher is ever refactored.
+class FakeProc:
+    def __init__(self, returncode, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+_real_run = subprocess.run
+_call_log = []
+_mode = {"value": "fail"}  # toggle between "fail" and "ok"
+
+def fake_run(cmd, **kwargs):
+    if not (isinstance(cmd, list) and cmd[:2] == ["gh", "pr"]):
+        return _real_run(cmd, **kwargs)
+    _call_log.append(_mode["value"])
+    if _mode["value"] == "fail":
+        return FakeProc(returncode=1, stderr="gh: API rate limit exceeded\n")
+    return FakeProc(
+        returncode=0,
+        stdout='[{"number": 7777, "labels": [{"name": "orch:needs-robbie"}]}]',
+    )
+
+api_board.subprocess.run = fake_run
+try:
+    # Poll 1 — gh fails; err is populated and cached.
+    labels1, err1 = api_board._fetch_pr_labels()
+    assert labels1 == {}, f"poll 1: labels should be empty on failure: {labels1!r}"
+    assert err1 and "rate limit" in err1, f"poll 1: err should carry gh stderr: {err1!r}"
+    assert _call_log == ["fail"], f"poll 1 should have shelled gh once: {_call_log}"
+
+    # Poll 2 — within the 30 s TTL. MUST return the cached err (not None)
+    # without re-shelling gh. This is the core regression: the prior
+    # implementation returned (cached_labels, None) here.
+    labels2, err2 = api_board._fetch_pr_labels()
+    assert labels2 == {}, f"poll 2: labels should still be empty: {labels2!r}"
+    assert err2 == err1, (
+        f"poll 2: cache hit MUST replay the cached err on every TTL-window "
+        f"poll, not just the first. Got err2={err2!r}, expected {err1!r}"
+    )
+    assert _call_log == ["fail"], (
+        f"poll 2: cache hit must NOT re-shell gh within the TTL: {_call_log}"
+    )
+
+    # Poll 3 — force a cache reset and let gh succeed. The cached err must
+    # clear back to None on a successful refetch (acceptance #3).
+    api_board._reset_pr_label_cache()
+    _mode["value"] = "ok"
+    labels3, err3 = api_board._fetch_pr_labels()
+    assert err3 is None, f"poll 3: successful refetch must clear cached err: {err3!r}"
+    assert labels3 == {7777: ["orch:needs-robbie"]}, (
+        f"poll 3: labels should reflect the stubbed gh response: {labels3!r}"
+    )
+    assert _call_log == ["fail", "ok"], (
+        f"poll 3 should have shelled gh again after reset: {_call_log}"
+    )
+
+    # And a cache hit after the successful refetch must keep err=None
+    # (closing the loop — the err clear is durable, not transient).
+    labels4, err4 = api_board._fetch_pr_labels()
+    assert err4 is None, f"poll 4: cache hit after success must still carry err=None: {err4!r}"
+    assert labels4 == labels3, f"poll 4: labels should match cached success: {labels4!r}"
+    assert _call_log == ["fail", "ok"], (
+        f"poll 4: cache hit must NOT re-shell gh: {_call_log}"
+    )
+finally:
+    api_board.subprocess.run = _real_run
+    api_board._reset_pr_label_cache()
+sys.exit(0)
+PY
+  pass "scenario 13 (pr-label cache replays err on every TTL poll, clears on refetch)"
+else
+  fail "scenario 13 (pr-label cache err replay)"
+fi
+
 # ─── Summary ───────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((TESTS_PASSED + TESTS_FAILED))
