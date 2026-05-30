@@ -54,3 +54,10 @@ Format:
 **Recommended option:** n/a
 **Reason:** `find orchestrator-kit` recursively matches all subdirectories including `_heuristics/` and `tests/`; verified by listing matched files before editing
 **Reversible:** yes
+
+## 2026-05-30 17:05 — Plan 08 Task 2
+**Decision:** Placed `fallback_non_json_review` in `_dispatcher_lib.sh` (and mirrored to root) rather than inlining the ~80-line function in `review-pr.sh`. `_dispatcher_lib.sh` was not in the task's declared `touches` list — Task 1 ran in parallel but per `git log ada2294` only touched `review-pass.sh`, so there is no merge-conflict risk on this branch.
+**Severity:** routine
+**Recommended option:** yes
+**Reason:** Plan spec says "Either factor the fallback logic into a tiny shell function called from review-pr.sh and unit-test it, OR test the script end-to-end with mocked gh — whichever is closer to the existing kit test style." Existing tests (`_test_emit_event.sh`) source `_dispatcher_lib.sh` and test functions directly; the same pattern lets `_test_review_fallback.sh` exercise the fallback in isolation with a `gh` stub on PATH, instead of end-to-end-mocking the whole review-pr.sh pipeline (claude -p, jq, state.json…). Function is sourced into review-pr.sh's scope via the existing `source _dispatcher_lib.sh` at line 69.
+**Reversible:** yes
