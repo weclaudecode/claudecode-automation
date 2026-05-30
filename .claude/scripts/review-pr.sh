@@ -33,9 +33,11 @@
 #   <!-- orch:review-sha:<headOid> -->
 #
 # Exit codes:
-#   0  review posted (approve OR request-changes)
+#   0  review posted (approve OR request-changes) OR non-JSON fallback applied
+#      (orch:review-sha marker + orch:review-blocked label + explanatory
+#      comment on the PR — fallback_non_json_review in _dispatcher_lib.sh)
 #   1  environment / args / lookup failure
-#   2  reviewer ran but produced unparseable output (no review posted)
+#   2  reviewer ran but produced no result entry at all (no fallback possible)
 
 set -uo pipefail
 
@@ -331,10 +333,11 @@ VERDICT_JSON=$(echo "$RESULT_TEXT" \
   | jq -c '.' 2>/dev/null)
 
 if [ -z "$VERDICT_JSON" ]; then
-  echo "review-pr: reviewer output was not valid JSON" >&2
-  echo "review-pr: raw result:" >&2
+  echo "review-pr: reviewer output was not valid JSON — invoking synthetic-blocker fallback" >&2
+  echo "review-pr: raw result (first 40 lines):" >&2
   printf '%s\n' "$RESULT_TEXT" | head -40 >&2
-  exit 2
+  fallback_non_json_review "$REPO" "$PR_NUM" "$HEAD_OID" "$PR_BODY" "$RESULT_TEXT"
+  exit 0
 fi
 
 # ---- Classify findings ----

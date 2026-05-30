@@ -659,3 +659,91 @@ update_task_usage() {
     .tasks[$t].usage.models = ((.tasks[$t].usage.models + [$run.model]) | map(select(. != null)) | unique)
   ' --arg t "$task_num" --argjson run "$run_obj"
 }
+
+# fallback_non_json_review — synthetic-blocker fallback for a reviewer run
+# whose final assistant message was not parseable as JSON.
+#
+# Used by review-pr.sh when VERDICT_JSON ends up empty. Without a fallback,
+# review-pr.sh exits 2 with no marker applied and review-pass.sh re-spawns
+# the reviewer on the next tick — at ~$2.19 per failed review and a */5
+# default cadence, ~$26/hour until manual intervention (see plan PLAN-08
+# rationale).
+#
+# What this does:
+#   1. Strips any prior <!-- orch:review-sha:HEX --> marker from the PR
+#      body and appends a new one for HEAD_OID — review-pass.sh treats
+#      that as "this SHA already reviewed" and stops re-spawning.
+#   2. Applies the orch:review-blocked label so iterate-pass.sh picks the
+#      PR up for operator-facing iteration on the next tick.
+#   3. Posts a top-level PR comment carrying the reviewer's raw prose
+#      (first 40 lines) so the operator can read the verdict.
+#
+# Idempotency: if the body already carries the marker for the same
+# HEAD_OID, the fallback was invoked for this exact SHA on a prior tick —
+# return immediately without re-posting the comment so repeated runs
+# against the same SHA do not pile up duplicate comments.
+#
+# Each gh failure degrades to a stderr warning rather than failing the
+# fallback. The orchestrator log treats the tick as healthy either way —
+# that is the whole point of this code path.
+#
+# Args:
+#   $1  repo         owner/repo for gh
+#   $2  pr_num       PR number
+#   $3  head_oid     full 40-char SHA of the PR HEAD
+#   $4  pr_body      current PR body (used for marker-presence + edit base)
+#   $5  result_text  raw reviewer prose (first 40 lines go in the comment)
+#
+# Returns: 0 always.
+fallback_non_json_review() {
+  local repo="$1"
+  local pr_num="$2"
+  local head_oid="$3"
+  local pr_body="$4"
+  local result_text="$5"
+
+  if printf '%s\n' "$pr_body" | grep -qE "<!-- orch:review-sha:${head_oid} -->"; then
+    echo "review-pr: fallback: marker for ${head_oid:0:8} already on PR — skipping (idempotent)"
+    return 0
+  fi
+
+  local clean_body new_body
+  clean_body=$(printf '%s\n' "$pr_body" | sed -E '/<!-- orch:review-sha:[a-f0-9]+ -->/d')
+  new_body=$(printf '%s\n\n<!-- orch:review-sha:%s -->\n' "$clean_body" "$head_oid")
+
+  gh pr edit "$pr_num" --repo "$repo" --body "$new_body" >/dev/null 2>&1 \
+    || echo "review-pr: fallback warning — failed to update PR body with review-sha marker" >&2
+
+  gh pr edit "$pr_num" --repo "$repo" --add-label "orch:review-blocked" >/dev/null 2>&1 \
+    || echo "review-pr: fallback warning — failed to apply orch:review-blocked label" >&2
+
+  local prose_head
+  prose_head=$(printf '%s\n' "$result_text" | head -40)
+  local comment_body
+  comment_body=$(cat <<EOF
+**Reviewer produced non-JSON output — synthetic blocker applied.**
+
+The orchestrator's review-pr.sh expects a JSON verdict envelope but the
+reviewer returned prose. The raw output (first 40 lines) is below.
+
+Operator action: read the reviewer's prose verdict, decide whether the
+PR should be approved or revised, then either (a) merge manually and
+apply the marker, or (b) remove \`orch:review-blocked\` and let
+iterate-pass run, then re-trigger review.
+
+<details><summary>Raw reviewer output</summary>
+
+\`\`\`
+${prose_head}
+\`\`\`
+
+</details>
+EOF
+  )
+
+  gh pr comment "$pr_num" --repo "$repo" --body "$comment_body" >/dev/null 2>&1 \
+    || echo "review-pr: fallback warning — failed to post explanatory PR comment" >&2
+
+  echo "review-pr: fallback: non-JSON reviewer output — applied review-sha marker, orch:review-blocked label, and explanatory comment on PR #${pr_num}"
+  return 0
+}
