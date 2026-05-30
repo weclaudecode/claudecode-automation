@@ -196,9 +196,13 @@ def _plan_slug_full(state: dict) -> str:
 # ── GH PR labels fetcher (30 s cache) ─────────────────────────────────────
 
 _pr_meta_lock = threading.Lock()
-# Cache entry: (mono_time, labels_by_pr). Error responses cache an empty
-# dict so an outage doesn't re-shell `gh` on every 5 s frontend poll.
-_pr_meta_cache: tuple[float, dict[int, list[str]]] | None = None
+# Cache entry: (mono_time, labels_by_pr, err). `err` is the cached fetch
+# error (or None on success). Both fields are returned on every cache hit
+# so a `gh` outage surfaces in `errors[]` on every poll throughout the
+# TTL window — not just the first one. Without this, sensitive in-review
+# tasks could silently migrate out of Blocked while the operator-visible
+# warning banner had already cleared.
+_pr_meta_cache: tuple[float, dict[int, list[str]], str | None] | None = None
 
 
 def _fetch_pr_labels() -> tuple[dict[int, list[str]], str | None]:
@@ -207,7 +211,7 @@ def _fetch_pr_labels() -> tuple[dict[int, list[str]], str | None]:
     now = time.monotonic()
     with _pr_meta_lock:
         if _pr_meta_cache and (now - _pr_meta_cache[0]) < _PR_LABEL_CACHE_TTL_SECONDS:
-            return _pr_meta_cache[1], None
+            return _pr_meta_cache[1], _pr_meta_cache[2]
 
         err: str | None = None
         labels_by_pr: dict[int, list[str]] = {}
@@ -243,9 +247,9 @@ def _fetch_pr_labels() -> tuple[dict[int, list[str]], str | None]:
 
         # Always populate the cache — even on error — so a `gh` outage
         # doesn't re-shell the CLI on every poll within the TTL window.
-        # On error we cache an empty dict; callers see no labels and
-        # the column-builder falls through to label-free placements.
-        _pr_meta_cache = (now, labels_by_pr)
+        # The cached err is returned alongside the (possibly empty) labels
+        # dict on every hit until the next successful refetch clears it.
+        _pr_meta_cache = (now, labels_by_pr, err)
         if err:
             log.warning("api_board: pr labels fetch failed: %s", err)
         return labels_by_pr, err
