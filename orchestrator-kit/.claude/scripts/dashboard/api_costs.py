@@ -42,8 +42,18 @@ In-memory cache is keyed by `(state_file_path, mtime)` so a state file
 write invalidates exactly that file's cache entry. Concurrency is
 single-tick (Flask dev server is single-process); we do not lock.
 
-All helpers are best-effort: a missing state file, malformed usage
-block, or unreadable mtime returns `0.0` / `{}` rather than raising.
+Load-failure contract
+---------------------
+Per-file load failures (missing, unreadable, malformed JSON) do **not**
+raise — `cost_today` / `tokens_today` aggregate across N state files and
+one bad file must not abort the panel. But the failure is no longer
+silent: `_load_state` emits a `log.warning` naming the path + exception
+type AND appends the same message to a module-level error list. The
+aggregation entry points (`cost_today`, `tokens_today`, the `/api/costs`
+route) clear the list at the start of each call; `load_errors()` returns
+the messages accumulated during the most recent call. `api_board.py`
+folds these into `errors[]` on `/api/board` so the operator sees a
+banner instead of silently-zeroed cost/token panels.
 """
 
 from __future__ import annotations
@@ -51,7 +61,9 @@ from __future__ import annotations
 import datetime as _dt
 import glob
 import json
+import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +72,7 @@ from flask import Blueprint, jsonify
 from dashboard.app import json_envelope
 
 bp = Blueprint("costs", __name__)
+log = logging.getLogger("dashboard.costs")
 
 
 # ── Pricing table ──────────────────────────────────────────────────────────
@@ -131,17 +144,57 @@ def _run_cost(run: dict[str, Any]) -> float:
 # that assumption ever changes, swap to functools.lru_cache.
 _state_cache: dict[str, tuple[int, dict[str, Any]]] = {}
 
+# Module-level error channel for the dashboard's /api/board composer.
+# `_load_state` appends here on any failure; aggregation entry points
+# (`cost_today`, `tokens_today`, `/api/costs`) call `_reset_load_errors`
+# at the start of their work, then `load_errors()` returns the messages
+# accumulated during that single aggregation pass.
+#
+# Guarded by a threading.Lock because Flask's dev server can serve
+# concurrent requests on different threads (waitress / gunicorn in prod
+# definitely will); without the lock, a poll mid-aggregation could see
+# a partially-cleared or partially-appended list.
+_load_errors_lock = threading.Lock()
+_recent_load_errors: list[str] = []
+
+
+def _record_load_error(msg: str) -> None:
+    with _load_errors_lock:
+        _recent_load_errors.append(msg)
+
+
+def _reset_load_errors() -> None:
+    with _load_errors_lock:
+        _recent_load_errors.clear()
+
+
+def load_errors() -> list[str]:
+    """Return a copy of error messages from the most recent aggregation pass.
+
+    Called by `api_board.py` after the board is built; each message is
+    folded into the `errors[]` payload with `source: "api_costs"` so the
+    operator sees a banner instead of a silently-zeroed cost panel.
+    Returns a copy so callers can't mutate the live buffer.
+    """
+    with _load_errors_lock:
+        return list(_recent_load_errors)
+
 
 def _load_state(path: str | os.PathLike[str]) -> dict[str, Any]:
     """Return parsed state.json, cached by mtime.
 
     Returns `{}` on any error (missing file, unreadable, malformed JSON)
-    so callers never have to handle exceptions for normal "no data" cases.
+    because callers aggregate across many files and one bad file must
+    not abort the panel. Failures are logged via `log.warning` AND
+    recorded in `_recent_load_errors` so `/api/board` can surface them.
     """
     p = str(path)
     try:
         mtime_ns = os.stat(p).st_mtime_ns
-    except OSError:
+    except OSError as e:
+        msg = f"{p}: {type(e).__name__}: {e}"
+        log.warning("api_costs: state file stat failed: %s", msg)
+        _record_load_error(msg)
         return {}
 
     hit = _state_cache.get(p)
@@ -151,7 +204,10 @@ def _load_state(path: str | os.PathLike[str]) -> dict[str, Any]:
     try:
         with open(p, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as e:
+        msg = f"{p}: {type(e).__name__}: {e}"
+        log.warning("api_costs: state file load failed: %s", msg)
+        _record_load_error(msg)
         return {}
 
     _state_cache[p] = (mtime_ns, data)
@@ -216,6 +272,7 @@ def cost_today() -> dict[str, Any]:
     `this_week_usd`. Days are UTC. Returns `{}` if no state files exist
     or none contain any usage data.
     """
+    _reset_load_errors()
     now = _dt.datetime.now(_dt.timezone.utc).date()
     yesterday = now - _dt.timedelta(days=1)
     week_start = now - _dt.timedelta(days=6)  # last 7 days including today
@@ -301,6 +358,7 @@ def tokens_today() -> dict[str, Any]:
     Days are UTC. The Max-subscription-friendly headline number is
     `total` (sum of all four categories).
     """
+    _reset_load_errors()
     now = _dt.datetime.now(_dt.timezone.utc).date()
     yesterday = now - _dt.timedelta(days=1)
     week_start = now - _dt.timedelta(days=6)
@@ -375,6 +433,10 @@ def api_costs():
       }
     """
     try:
+        # Both helpers reset _recent_load_errors internally; calling
+        # _reset_load_errors here too keeps the contract explicit at the
+        # route level even if the helpers' reset behavior ever changes.
+        _reset_load_errors()
         today_tokens = tokens_today()
         today_cost = cost_today()
         per_task: dict[str, dict[str, dict[str, Any]]] = {}

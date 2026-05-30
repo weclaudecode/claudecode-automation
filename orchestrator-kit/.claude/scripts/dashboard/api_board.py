@@ -40,6 +40,7 @@ from typing import Any, Callable
 from flask import Blueprint, jsonify
 
 from dashboard.app import json_envelope
+from dashboard import api_costs
 from dashboard.api_costs import cost_for_task, cost_today
 from dashboard.api_github import _fetch_payload as _gh_fetch_payload
 from dashboard.api_workers import _list_worktrees as _list_worktrees_for_board
@@ -774,6 +775,19 @@ def board_endpoint():
             "suggestion": "check state files have usage records",
         })
         cost = {}
+
+    # Surface api_costs._load_state failures (truncated / unreadable
+    # state.json) into the operator-visible errors[] channel. Without
+    # this, _load_state's empty-dict fallback would silently zero out
+    # the cost / token panels with no diagnostic in the dashboard UI.
+    # cost_today() reset _recent_load_errors at the start of its walk,
+    # so this read reflects the most recent aggregation pass.
+    for msg in api_costs.load_errors():
+        errors.append({
+            "source": "api_costs",
+            "message": msg,
+            "suggestion": "validate .claude/plans/*.state.json with `python -m json.tool`",
+        })
 
     log_lines, log_err = _log_tail()
     if log_err:

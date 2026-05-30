@@ -746,6 +746,152 @@ else
   fail "scenario 13 (pr-label cache err replay)"
 fi
 
+# ─── Scenario 14: truncated state.json surfaces via api_costs.load_errors ──
+# Regression for PLAN-07 T3: when a state file is unreadable / truncated /
+# malformed, _load_state used to swallow the exception and return {} with
+# zero diagnostic — the cost + token panels silently zero'd out. The fix
+# logs a warning AND appends to a module-level error list that the
+# /api/board composer folds into errors[] with source="api_costs". This
+# test exercises the api_costs layer (cost_today fallback + load_errors)
+# AND the api_board layer (errors[] surfacing).
+echo "--- 14: truncated state.json surfaces via load_errors + /api/board ---"
+SCEN14_DIR="$TMPROOT/scen14"
+mkdir -p "$SCEN14_DIR/.claude/plans"
+# Truncated state file: JSON object with the closing brace removed.
+# json.load will raise ValueError (json.JSONDecodeError); _load_state
+# must log + record and return {}.
+cat > "$SCEN14_DIR/.claude/plans/PLAN-09-broken.state.json" <<'JSON'
+{
+  "plan_file": ".claude/plans/PLAN-09-broken.md",
+  "total_tasks": 1,
+  "status": "in_progress",
+  "tasks": {
+    "1": {
+      "title": "broken state",
+      "status": "merged",
+      "usage": {
+        "runs": [
+          {"kind": "worker", "cost_usd": 0.10, "run_at": "2026-05-27T01:00:00Z"}
+        ]
+      }
+    }
+JSON
+# Also drop a valid state file so cost_today has at least one path to walk
+# successfully — the test must show the bad file is named in load_errors
+# while the good file still aggregates normally.
+cat > "$SCEN14_DIR/.claude/plans/PLAN-09-good.state.json" <<'JSON'
+{
+  "plan_file": ".claude/plans/PLAN-09-good.md",
+  "total_tasks": 1,
+  "status": "in_progress",
+  "tasks": {
+    "2": {
+      "title": "valid state",
+      "status": "merged",
+      "usage": {
+        "runs": [
+          {"kind": "worker", "cost_usd": 0.20, "run_at": "1999-01-01T01:00:00Z"}
+        ]
+      }
+    }
+  }
+}
+JSON
+if KIT_SCRIPTS_DIR="$KIT_SCRIPTS_DIR" SCEN14_DIR="$SCEN14_DIR" run_py <<'PY'; then
+import os, sys, json
+sys.path.insert(0, os.environ["KIT_SCRIPTS_DIR"])
+os.chdir(os.environ["SCEN14_DIR"])
+
+from flask import Flask
+from dashboard import api_board, api_costs
+
+# Drop caches so each assertion reads the tmpdir from scratch.
+api_costs._state_cache.clear()
+api_costs._reset_load_errors()
+api_board._reset_pr_label_cache()
+
+# ── Layer 1: api_costs.cost_today fallback + load_errors ─────────────────
+result = api_costs.cost_today()
+# The good file's run is dated 1999 (well outside today), so today_usd
+# should be 0.0. But the function must NOT raise on the truncated file —
+# it returns a dict (possibly with today_usd = 0.0) rather than crashing.
+# `cost_today` returns {} only when NO usage data exists at all; the good
+# file has usage so the call returns a populated dict.
+assert isinstance(result, dict), f"cost_today must return a dict (fallback), got {type(result).__name__}"
+assert result.get("today_usd", 0.0) == 0.0, (
+    f"today_usd should be 0.0 (good file's run is dated 1999): {result}"
+)
+
+errs = api_costs.load_errors()
+assert errs, f"load_errors must be non-empty after a truncated state file load: {errs!r}"
+broken_path = ".claude/plans/PLAN-09-broken.state.json"
+matching = [e for e in errs if broken_path in e]
+assert matching, (
+    f"load_errors must name the bad path {broken_path!r}: {errs!r}"
+)
+# Exception type should appear in the message — the spec calls for naming
+# the path AND the exception type so the operator can distinguish a
+# permissions error from a JSON parse error from a missing file.
+assert any("Error" in e or "Exception" in e for e in matching), (
+    f"load_errors entry should name the exception type: {matching!r}"
+)
+
+# ── Layer 2: load_errors is a copy, not the live buffer ──────────────────
+errs.append("synthetic pollution")
+assert "synthetic pollution" not in api_costs.load_errors(), (
+    "load_errors() must return a copy; mutating the result must not leak "
+    "back into the live buffer"
+)
+
+# ── Layer 3: reset semantics — re-calling cost_today wipes prior errors ──
+# A subsequent cost_today() call with a fresh _state_cache should reset
+# the buffer at the start, then repopulate with the bad file's error
+# (same path, same exception). The bad file should appear EXACTLY once,
+# not accumulated from the prior call.
+api_costs._state_cache.clear()
+api_costs.cost_today()
+errs_after = api_costs.load_errors()
+bad_path_count = sum(1 for e in errs_after if broken_path in e)
+assert bad_path_count == 1, (
+    f"reset semantics broken: bad path should appear exactly once after a "
+    f"fresh cost_today() call (reset + 1 repopulate), got {bad_path_count} "
+    f"in {errs_after!r}"
+)
+
+# ── Layer 4: api_board /api/board surfaces api_costs errors in errors[] ──
+# Stub the gh/worker IO seams so the route handler reaches the cost layer
+# and we can inspect the JSON envelope cleanly.
+api_board._gh_fetch_payload = lambda: ({"open_issues": [], "recent_prs": []}, None)
+api_board._list_worktrees_for_board = lambda: []
+api_board._fetch_pr_labels = lambda: ({}, None)
+api_costs._state_cache.clear()
+api_costs._reset_load_errors()
+api_board._reset_pr_label_cache()
+
+app = Flask(__name__)
+app.register_blueprint(api_board.bp)
+client = app.test_client()
+
+resp = client.get("/api/board")
+assert resp.status_code == 200, f"status: {resp.status_code} body: {resp.data}"
+envelope = resp.get_json()
+payload = envelope["data"]
+
+api_costs_errs = [e for e in payload["errors"] if e.get("source") == "api_costs"]
+assert api_costs_errs, (
+    f"/api/board errors[] must include source='api_costs' entries when a "
+    f"state file fails to load: {payload['errors']!r}"
+)
+assert any(broken_path in e.get("message", "") for e in api_costs_errs), (
+    f"at least one api_costs error must name {broken_path!r}: {api_costs_errs!r}"
+)
+sys.exit(0)
+PY
+  pass "scenario 14 (truncated state.json surfaces via load_errors + /api/board errors[])"
+else
+  fail "scenario 14 (truncated state.json surfaces via load_errors)"
+fi
+
 # ─── Summary ───────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((TESTS_PASSED + TESTS_FAILED))
