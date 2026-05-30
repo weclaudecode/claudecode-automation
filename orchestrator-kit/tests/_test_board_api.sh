@@ -586,6 +586,70 @@ else
   fail "scenario 11 (Argus assignment)"
 fi
 
+# ─── Scenario 12: in_review with pr_obj None must not fall to Blocked ─────
+# Regression for PLAN-07 T1: when `gh pr list` truncates (default --limit
+# was too low) or lags behind PR creation, an in_review task whose pr
+# number isn't in gh_prs used to slip through the defensive "pr_open is
+# False → blocked" branch in _column_for_task. The new
+# _column_when_pr_missing helper routes on task.status alone instead.
+echo "--- 12: in_review with pr_obj None → in_review / ready_for_review ---"
+if KIT_SCRIPTS_DIR="$KIT_SCRIPTS_DIR" run_py <<'PY'; then
+import os, sys
+sys.path.insert(0, os.environ["KIT_SCRIPTS_DIR"])
+from dashboard import api_board
+
+api_board._reset_pr_label_cache()
+state = {
+    "plan_file": ".claude/plans/PLAN-09-trunc.md",
+    "tasks": {
+        # PR 9001 lives in the task row but is missing from gh_prs below —
+        # simulates gh pr list truncation or a slow gh sync.
+        "1": {"title": "no-label in-review",   "status": "in_review", "pr": 9001},
+        # PR 9002 also missing from gh_prs but its labels are populated
+        # via the independent pr_labels fetch (which works even when the
+        # PR doesn't appear in gh_prs).
+        "2": {"title": "review-sha in-review", "status": "in_review", "pr": 9002},
+    },
+}
+# Deliberately empty: simulates gh pr list returning a truncated page
+# that excludes both PRs.
+gh_prs = []
+pr_labels = {9002: ["orch:review-sha:cafef00d"]}
+
+board = api_board.build_board(
+    active_states=[("p.json", state)],
+    archived_states=[],
+    gh_issues=[],
+    gh_prs=gh_prs,
+    pr_labels=pr_labels,
+    workers_pool=["Pip", "Bento"],
+    jokes_pool=["j"],
+    cost_fn=lambda p, t: 0.0,
+    utc_date="2026-05-27",
+)
+
+def task_in(col, n):
+    return any(c.get("task") == n for c in board[col])
+
+assert board["blocked"] == [], (
+    f"in_review tasks with missing pr_obj must NOT fall to Blocked: "
+    f"{board['blocked']}"
+)
+assert task_in("ready_for_review", 1), (
+    f"task 1 (no labels) should land in ready_for_review: {board}"
+)
+assert task_in("in_review", 2), (
+    f"task 2 (review-sha label present) should land in in_review: {board}"
+)
+total = sum(len(v) for v in board.values())
+assert total == 2, f"expected exactly 2 cards across all columns, got {total}: {board}"
+sys.exit(0)
+PY
+  pass "scenario 12 (in_review with pr_obj None routes by status, not Blocked)"
+else
+  fail "scenario 12 (in_review with pr_obj None)"
+fi
+
 # ─── Summary ───────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((TESTS_PASSED + TESTS_FAILED))

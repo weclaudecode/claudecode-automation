@@ -93,7 +93,11 @@ def _fetch_payload() -> tuple[dict | None, str | None]:
         "--repo", repo,
         "--state", "all",
         "--json", "number,title,state,mergedAt,url,statusCheckRollup",
-        "--limit", "30",
+        # Raised from 30 → 100: at the prior limit, in-flight PRs got
+        # truncated out of the response and the board's pr_obj-is-None
+        # branch in api_board.build_board misclassified live in_review
+        # tasks as Blocked.
+        "--limit", "100",
     ])
     if rc != 0:
         return None, (err or out).strip()[:500]

@@ -304,6 +304,38 @@ def _column_for_task(
     return None
 
 
+def _column_when_pr_missing(
+    status: str | None,
+    pr_labels: list[str],
+    sensitive: bool,
+) -> str | None:
+    """Column placement for tasks whose PR object isn't in the gh_prs list.
+
+    Triggered when `gh pr list` truncated the result (limit too low) or
+    when there's a sync lag between PR creation and the next dashboard
+    poll. We can't infer `pr_open`/`pr_merged` from a missing PR, so
+    routing on `task.status` alone is safer than passing pr_open=False
+    to `_column_for_task` and falling into its defensive blocked branch.
+    """
+    # The independent pr_labels fetch may still surface needs-robbie even
+    # when the PR object is missing from gh_prs, so the sensitive precedence
+    # is preserved here.
+    if status == "in_review" and sensitive and "orch:needs-robbie" in pr_labels:
+        return "blocked"
+    if status == "pending":
+        return "todo"
+    if status == "in_progress":
+        return "in_progress"
+    if status == "merged":
+        return "done"
+    if status == "blocked":
+        return "blocked"
+    if status == "in_review":
+        has_review_sha = any(lbl.startswith("orch:review-sha:") for lbl in pr_labels)
+        return "in_review" if has_review_sha else "ready_for_review"
+    return None
+
+
 # ── Card builder ──────────────────────────────────────────────────────────
 
 def _agent_for_column(
@@ -411,7 +443,13 @@ def build_board(
             pr_open = bool(pr_obj and pr_state == "OPEN" and not pr_merged)
             labels = pr_labels.get(pr_num, []) if isinstance(pr_num, int) else []
 
-            column = _column_for_task(t, pr_open, pr_merged, labels, sensitive)
+            if pr_obj is None:
+                # `gh pr list` may truncate or lag; route on task.status
+                # alone rather than feeding pr_open=False into the strict
+                # helper (which would dump in_review tasks into Blocked).
+                column = _column_when_pr_missing(t.get("status"), labels, sensitive)
+            else:
+                column = _column_for_task(t, pr_open, pr_merged, labels, sensitive)
             if column is None:
                 continue
 
