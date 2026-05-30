@@ -892,6 +892,215 @@ else
   fail "scenario 14 (truncated state.json surfaces via load_errors)"
 fi
 
+# ─── Scenario 15: /api/costs happy path → 200 with empty errors[] ────────
+# Regression for PLAN-07 T4 acceptance #5: the route handler returns the
+# documented schema (today_tokens, today_cost, per_task, errors) with an
+# empty errors[] when every state file loads cleanly.
+echo "--- 15: /api/costs happy path → 200, errors[] empty ---"
+SCEN15_DIR="$TMPROOT/scen15"
+mkdir -p "$SCEN15_DIR/.claude/plans"
+cat > "$SCEN15_DIR/.claude/plans/PLAN-15-happy.state.json" <<'JSON'
+{
+  "plan_file": ".claude/plans/PLAN-15-happy.md",
+  "total_tasks": 1,
+  "status": "in_progress",
+  "tasks": {
+    "1": {
+      "title": "happy task",
+      "status": "merged",
+      "usage": {
+        "runs": [
+          {"kind": "worker", "cost_usd": 0.50, "run_at": "2026-05-27T01:00:00Z"}
+        ]
+      }
+    }
+  }
+}
+JSON
+if KIT_SCRIPTS_DIR="$KIT_SCRIPTS_DIR" SCEN15_DIR="$SCEN15_DIR" run_py <<'PY'; then
+import os, sys
+sys.path.insert(0, os.environ["KIT_SCRIPTS_DIR"])
+os.chdir(os.environ["SCEN15_DIR"])
+
+from flask import Flask
+from dashboard import api_costs
+
+api_costs._state_cache.clear()
+api_costs._reset_load_errors()
+
+app = Flask(__name__)
+app.register_blueprint(api_costs.bp)
+client = app.test_client()
+
+resp = client.get("/api/costs")
+assert resp.status_code == 200, f"status: {resp.status_code} body: {resp.data}"
+envelope = resp.get_json()
+assert envelope.get("error") is None, f"happy path must not set envelope.error: {envelope}"
+payload = envelope["data"]
+
+# Documented schema: today_tokens, today_cost, per_task, errors must all
+# be present so the frontend can render without optional-key gymnastics.
+for k in ("today_tokens", "today_cost", "per_task", "errors"):
+    assert k in payload, f"payload missing key {k!r}: {payload}"
+
+assert payload["errors"] == [], (
+    f"happy path must produce empty errors[]: {payload['errors']}"
+)
+# The happy state file should appear in per_task under its plan_file slug.
+assert "PLAN-15-happy" in payload["per_task"], (
+    f"per_task should contain the loaded plan: {payload['per_task']}"
+)
+plan_entry = payload["per_task"]["PLAN-15-happy"]
+assert "1" in plan_entry, f"task 1 should be in plan entry: {plan_entry}"
+assert plan_entry["1"]["cost_usd"] == 0.5, (
+    f"cost_usd should reflect the run: {plan_entry['1']}"
+)
+sys.exit(0)
+PY
+  pass "scenario 15 (/api/costs happy path → 200 with empty errors[])"
+else
+  fail "scenario 15 (/api/costs happy path)"
+fi
+
+# ─── Scenario 16: per-file catch — KeyError on one file does NOT nuke payload
+# Regression for PLAN-07 T4 acceptance #6: a malformed task dict that
+# raises KeyError inside the per_task loop must be scoped to that single
+# state file. The route returns 200 with errors[] naming the bad path,
+# and the OTHER (good) state file's per_task entries are still present.
+#
+# Trigger mechanism: monkey-patch cost_for_task to raise KeyError when
+# called with the bad plan's short slug. The natural code paths use
+# .get() throughout and don't raise KeyError on schema drift, so the
+# test stubs the helper to exercise the new per-file outer except block.
+# Functionally identical to a hypothetical future schema where some
+# helper does dict-key access and a missing key surfaces as KeyError.
+echo "--- 16: /api/costs per-file catch isolates one bad state file ---"
+SCEN16_DIR="$TMPROOT/scen16"
+mkdir -p "$SCEN16_DIR/.claude/plans"
+cat > "$SCEN16_DIR/.claude/plans/PLAN-16-good.state.json" <<'JSON'
+{
+  "plan_file": ".claude/plans/PLAN-16-good.md",
+  "total_tasks": 1,
+  "status": "in_progress",
+  "tasks": {
+    "1": {
+      "title": "good task",
+      "status": "merged",
+      "usage": {
+        "runs": [
+          {"kind": "worker", "cost_usd": 0.20, "run_at": "2026-05-27T01:00:00Z"}
+        ]
+      }
+    }
+  }
+}
+JSON
+cat > "$SCEN16_DIR/.claude/plans/PLAN-17-bad.state.json" <<'JSON'
+{
+  "plan_file": ".claude/plans/PLAN-17-bad.md",
+  "total_tasks": 1,
+  "status": "in_progress",
+  "tasks": {
+    "1": {
+      "title": "task whose rollup raises KeyError",
+      "status": "merged",
+      "usage": {
+        "runs": [
+          {"kind": "worker", "cost_usd": 0.10, "run_at": "2026-05-27T01:00:00Z"}
+        ]
+      }
+    }
+  }
+}
+JSON
+if KIT_SCRIPTS_DIR="$KIT_SCRIPTS_DIR" SCEN16_DIR="$SCEN16_DIR" run_py <<'PY'; then
+import os, sys
+sys.path.insert(0, os.environ["KIT_SCRIPTS_DIR"])
+os.chdir(os.environ["SCEN16_DIR"])
+
+from flask import Flask
+from dashboard import api_costs
+
+api_costs._state_cache.clear()
+api_costs._reset_load_errors()
+
+# Stub cost_for_task: raise KeyError for the bad plan, defer to the real
+# implementation for the good plan. The route imports cost_for_task by
+# name into its module scope, so patching api_costs.cost_for_task changes
+# what the route sees on the next call.
+_real_cost_for_task = api_costs.cost_for_task
+
+def stubbed_cost_for_task(plan, task):
+    if plan == "PLAN-17":
+        raise KeyError("simulated schema drift in PLAN-17 task rollup")
+    return _real_cost_for_task(plan, task)
+
+api_costs.cost_for_task = stubbed_cost_for_task
+
+try:
+    app = Flask(__name__)
+    app.register_blueprint(api_costs.bp)
+    client = app.test_client()
+
+    resp = client.get("/api/costs")
+    # Must NOT 500 — the per-file catch should turn this into a 200 with
+    # the bad file recorded in errors[].
+    assert resp.status_code == 200, (
+        f"per-file catch must keep route at 200: status={resp.status_code} "
+        f"body={resp.data!r}"
+    )
+    envelope = resp.get_json()
+    assert envelope.get("error") is None, (
+        f"per-file catch must not set envelope.error (that path is for "
+        f"whole-route 500s, not per-file errors): {envelope}"
+    )
+    payload = envelope["data"]
+
+    # ── errors[] must name the bad path ──────────────────────────────────
+    assert payload.get("errors"), (
+        f"errors[] must be populated when a state file fails to roll up: "
+        f"{payload!r}"
+    )
+    bad_path = ".claude/plans/PLAN-17-bad.state.json"
+    matching = [e for e in payload["errors"] if bad_path in e]
+    assert matching, (
+        f"errors[] must name the bad state-file path {bad_path!r}: "
+        f"{payload['errors']!r}"
+    )
+    # Exception type should be surfaced so operators can distinguish
+    # schema drift (KeyError) from a parse error (JSONDecodeError).
+    assert any("KeyError" in e for e in matching), (
+        f"errors[] entry must name KeyError so operators can triage: "
+        f"{matching!r}"
+    )
+
+    # ── per_task must contain entries from the OTHER (good) state file ──
+    assert "PLAN-16-good" in payload["per_task"], (
+        f"good plan must still appear in per_task despite bad sibling: "
+        f"{payload['per_task']}"
+    )
+    good_entry = payload["per_task"]["PLAN-16-good"]
+    assert "1" in good_entry, f"good plan's task 1 must be present: {good_entry}"
+    assert good_entry["1"]["cost_usd"] == 0.2, (
+        f"good plan's cost_usd should be unaffected by the bad sibling: "
+        f"{good_entry['1']}"
+    )
+
+    # ── Bad plan should NOT appear in per_task as a stale empty dict ────
+    # (The route uses a local plan_entry that's only published on success.)
+    assert "PLAN-17-bad" not in payload["per_task"], (
+        f"bad plan must not leak into per_task as an empty placeholder: "
+        f"{payload['per_task']}"
+    )
+finally:
+    api_costs.cost_for_task = _real_cost_for_task
+sys.exit(0)
+PY
+  pass "scenario 16 (per-file KeyError caught; errors[] populated; good plan still renders)"
+else
+  fail "scenario 16 (per-file catch)"
+fi
+
 # ─── Summary ───────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((TESTS_PASSED + TESTS_FAILED))
