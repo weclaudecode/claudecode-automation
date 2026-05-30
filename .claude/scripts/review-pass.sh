@@ -147,8 +147,18 @@ while read -r task_num pr_num; do
 
   HEAD_OID=$(echo "$PR_INFO" | jq -r '.headRefOid')
   PR_BODY=$(echo "$PR_INFO" | jq -r '.body // ""')
-  LAST_SHA=$(echo "$PR_BODY" | grep -oE 'orch:review-sha:[a-f0-9]+' | head -1 | cut -d: -f3)
-  LAST_CI_GATE_SHA=$(echo "$PR_BODY" | grep -oE 'orch:ci-gate-sha:[a-f0-9]+' | head -1 | cut -d: -f3)
+  # Require the full HTML-comment delimiters so a bare `orch:review-sha:HEX`
+  # appearing inside PR-body prose or a fenced code block can't shadow the
+  # real marker emitted by review-pr.sh:464. Stage 1 matches the delimited
+  # form; stage 2 lifts the hex (7-40 chars: short refs through full SHAs).
+  LAST_SHA=$(echo "$PR_BODY" \
+    | grep -oE '<!-- *orch:review-sha:[a-f0-9]+ *-->' \
+    | head -1 \
+    | grep -oE '[a-f0-9]{7,40}')
+  LAST_CI_GATE_SHA=$(echo "$PR_BODY" \
+    | grep -oE '<!-- *orch:ci-gate-sha:[a-f0-9]+ *-->' \
+    | head -1 \
+    | grep -oE '[a-f0-9]{7,40}')
 
   # Task 5.4: CI gate (precedes the LLM-review SHA short-circuit so a
   # CI-failed PR is re-evaluated until HEAD advances). Two independent
