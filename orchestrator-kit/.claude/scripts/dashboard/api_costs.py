@@ -430,17 +430,30 @@ def api_costs():
         today_tokens: {input, output, cache_read, cache_write, total, by_role, ...}
         today_cost:   {today_usd, by_role, yesterday_usd, this_week_usd}
         per_task:     {<plan>: {<task>: {tokens: {...}, cost_usd: float}}}
+        errors:       ["<state_file_path>: <ExceptionType>: <message>", ...]
       }
+
+    Error-handling contract
+    -----------------------
+    Per-state-file failures (missing files, malformed JSON, schema-drift
+    `KeyError`s on the task dict, value-shape `ValueError`s) are scoped to
+    a single loop iteration: the bad path is appended to `errors[]` and
+    iteration continues, so one broken state file does NOT nuke the rest
+    of the payload. Programmer errors (`AttributeError`, `TypeError`,
+    `RuntimeError`) deliberately propagate to Flask and produce a 500 —
+    surfacing them via `dashboard.log` and the frontend's transient-error
+    path is the whole point of NOT swallowing them.
     """
-    try:
-        # Both helpers reset _recent_load_errors internally; calling
-        # _reset_load_errors here too keeps the contract explicit at the
-        # route level even if the helpers' reset behavior ever changes.
-        _reset_load_errors()
-        today_tokens = tokens_today()
-        today_cost = cost_today()
-        per_task: dict[str, dict[str, dict[str, Any]]] = {}
-        for path in glob.glob(".claude/plans/*.state.json"):
+    # Both helpers reset _recent_load_errors internally; calling
+    # _reset_load_errors here too keeps the contract explicit at the
+    # route level even if the helpers' reset behavior ever changes.
+    _reset_load_errors()
+    today_tokens = tokens_today()
+    today_cost = cost_today()
+    per_task: dict[str, dict[str, dict[str, Any]]] = {}
+    errors: list[str] = []
+    for path in glob.glob(".claude/plans/*.state.json"):
+        try:
             state = _load_state(path)
             plan = (state.get("plan_file") or Path(path).stem).split("/")[-1].removesuffix(".md").removesuffix(".state")
             try:
@@ -448,19 +461,31 @@ def api_costs():
             except IndexError:
                 continue
             tasks = state.get("tasks") or {}
-            per_task[plan] = {}
+            # Build into a local dict so a mid-loop schema-drift exception
+            # (KeyError / ValueError caught by the outer block below)
+            # leaves `per_task` untouched for this plan rather than ending
+            # up with a misleading empty `{plan: {}}` placeholder.
+            plan_entry: dict[str, dict[str, Any]] = {}
             for task_id in tasks:
                 try:
-                    per_task[plan][task_id] = {
+                    plan_entry[task_id] = {
                         "tokens": tokens_for_task(plan_short, int(task_id)),
                         "cost_usd": cost_for_task(plan_short, int(task_id)),
                     }
                 except (ValueError, IndexError):
                     continue
-        return jsonify(json_envelope(data={
-            "today_tokens": today_tokens,
-            "today_cost": today_cost,
-            "per_task": per_task,
-        }))
-    except Exception as e:  # noqa: BLE001 — best-effort endpoint
-        return jsonify(json_envelope(error=f"api_costs: {type(e).__name__}: {e}"))
+            per_task[plan] = plan_entry
+        except (OSError, json.JSONDecodeError, ValueError, KeyError) as e:
+            msg = f"{path}: {type(e).__name__}: {e}"
+            log.warning("api_costs: per-file rollup failed: %s", msg)
+            errors.append(msg)
+            continue
+    # Fold any loader-level errors recorded by _load_state during this pass
+    # into the same `errors[]` channel so callers see one combined list.
+    errors.extend(load_errors())
+    return jsonify(json_envelope(data={
+        "today_tokens": today_tokens,
+        "today_cost": today_cost,
+        "per_task": per_task,
+        "errors": errors,
+    }))
