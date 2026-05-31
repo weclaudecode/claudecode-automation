@@ -55,6 +55,13 @@ Format:
 **Reason:** `find orchestrator-kit` recursively matches all subdirectories including `_heuristics/` and `tests/`; verified by listing matched files before editing
 **Reversible:** yes
 
+## 2026-05-31 12:00 — Plan 09 Task 3
+**Decision:** Unrecognised-branch sentinel sits on `card["name"] = "unrecognised"` (not `card["agent"]`), and the rendered card adds a `plan: None` + `branch: <raw>` pair. The plan spec said "for example card.agent set to a sentinel" but the existing `_workers_panel` output schema has no `agent` field — it carries `name` + `avatar_seed` which the frontend uses to render the avatar/label.
+**Severity:** routine
+**Recommended option:** n/a
+**Reason:** Keeping the sentinel on `name` slots into the existing schema with zero frontend changes — the workers panel renders `name` as the avatar label, so "unrecognised" surfaces immediately. Adding `plan: None` (instead of a fabricated "PLAN-?") signals "no plan attribution" to any future filter logic. Adding `branch: <raw>` gives the operator the offending string for debugging without re-reading the manifest.
+**Reversible:** yes
+
 ## 2026-05-30 17:05 — Plan 08 Task 2
 **Decision:** Placed `fallback_non_json_review` in `_dispatcher_lib.sh` (and mirrored to root) rather than inlining the ~80-line function in `review-pr.sh`. `_dispatcher_lib.sh` was not in the task's declared `touches` list — Task 1 ran in parallel but per `git log ada2294` only touched `review-pass.sh`, so there is no merge-conflict risk on this branch.
 **Severity:** routine
