@@ -791,3 +791,58 @@ maybe_enable_auto_merge() {
   echo "review-pr: warning — gh pr merge --auto failed on PR #$pr_num — leaving PR open for manual merge" >&2
   return 1
 }
+
+# ---- close_plan_status_issue ----
+# Post a final-ledger comment to the plan-status dashboard issue and close
+# it. Called by orchestrator.sh once its plan archives so the
+# `[plan-NN] status` issue does not linger in the backlog (closes #93).
+#
+# Usage:
+#   close_plan_status_issue <issue_num> <plan_num> <final_status> <archived_state_file>
+#
+# Inputs:
+#   issue_num             persisted .plan_status_issue from state.json. Empty
+#                         string -> silent no-op (plan opted out of dashboard
+#                         tracking, or was ingested before PLAN-12 T2).
+#   plan_num              numeric plan number for the ledger header.
+#   final_status          "done" | "blocked" — written into the comment.
+#   archived_state_file   path to the post-archive state.json. Counts and the
+#                         merged-PR bullet list are derived from here.
+#
+# Best-effort: any gh failure is logged as a warning but the function always
+# returns 0 so the calling tick survives a closed/missing issue or a network
+# blip — archiving the plan is the load-bearing operation, not closing the
+# dashboard issue.
+close_plan_status_issue() {
+  local issue_num="$1"
+  local plan_num="$2"
+  local final_status="$3"
+  local archived_state="$4"
+
+  [ -z "$issue_num" ] && return 0
+  if [ ! -f "$archived_state" ]; then
+    echo "close_plan_status_issue: archived state not found at $archived_state; skipping" >&2
+    return 0
+  fi
+
+  local ledger
+  ledger=$(jq -r --arg plan "$plan_num" --arg status "$final_status" '
+    def pr_list:
+      [.tasks | to_entries[]
+        | select(.value.status == "merged" and .value.pr != null)
+        | "- #" + (.value.pr | tostring) + " — task " + .key + ": " + (.value.title // "")]
+      | if length == 0 then ["- _(no merged PRs)_"] else . end | join("\n");
+    "## Plan " + $plan + " archived — `" + $status + "`\n\n" +
+    ([.tasks[] | select(.status == "merged")] | length | tostring) + " merged, " +
+    ([.tasks[] | select(.status == "blocked")] | length | tostring) + " blocked.\n\n" +
+    "### Merged PRs\n\n" + pr_list + "\n\n" +
+    "---\n*Auto-closed by orchestrator on plan archive.*"
+  ' "$archived_state" 2>/dev/null) || ledger="Plan $plan_num archived ($final_status)."
+
+  gh issue comment "$issue_num" --body "$ledger" >/dev/null 2>&1 \
+    || echo "warning: failed to comment on plan-status #$issue_num; continuing" >&2
+  gh issue close "$issue_num" >/dev/null 2>&1 \
+    || echo "warning: failed to close plan-status #$issue_num; continuing" >&2
+
+  return 0
+}
