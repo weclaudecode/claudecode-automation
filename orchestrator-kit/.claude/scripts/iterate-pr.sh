@@ -281,7 +281,7 @@ RUN_OUT="$REPO/.claude/state/iter-plan${PLAN_NUM}-t${TASK_NUM}-i${NEW_ITER}-r${R
 mkdir -p "$(dirname "$RUN_OUT")"
 
 WORKER_MODEL="${ORCH_WORKER_MODEL:-opus}"
-MAX_TURNS="${ORCH_MAX_TURNS:-30}"
+MAX_TURNS="${ORCH_MAX_TURNS:-60}"
 WORKER_TIMEOUT="${ORCH_WORKER_TIMEOUT:-600}"
 TIMEOUT_CMD=$(find_timeout_cmd)
 
