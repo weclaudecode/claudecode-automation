@@ -184,8 +184,13 @@ A [routine](https://code.claude.com/docs/en/routines) is a scheduled or
 event-triggered Claude Code session that runs on Anthropic's infrastructure —
 no always-on laptop or cron host required. Point one at the orchestrator:
 
-- **Schedule trigger** (e.g. every 5 minutes): run
+- **Schedule trigger** (e.g. every 2 minutes): run
   `cd /path/to/repo && ./orchestrator.sh`. One routine run = one tick.
+  Empirical evidence from the 2026-05-30 and 2026-05-31 dogfood sessions
+  backs the 2-minute cadence: worker runtime is 3–10 minutes, CI is
+  30–60 seconds, and auto-merge fires on green — so a 2-minute tick keeps
+  the feedback loop tight without measurably raising token cost, since most
+  ticks are early-return no-ops.
 - **GitHub-event trigger** (optional): fire a tick immediately on
   `pull_request` merge instead of waiting for the next interval, so a merged
   PR's dependents launch promptly.
@@ -200,12 +205,12 @@ routine to replace cron, not to replace the orchestrator.
 ### cron / launchd
 
 ```cron
-*/5 * * * * cd /path/to/repo && ./orchestrator.sh >> .claude/state/orchestrator.log 2>&1
+*/2 * * * * cd /path/to/repo && ./orchestrator.sh >> .claude/state/orchestrator.log 2>&1
 ```
 
 ### `/loop`
 
-In an interactive session at the repo root, run `/loop 5m ./orchestrator.sh`.
+In an interactive session at the repo root, run `/loop 2m ./orchestrator.sh`.
 The loop lives only as long as the session is open — fine for watching a plan
 run, not for unattended operation.
 
@@ -384,7 +389,7 @@ issues whose underlying pattern persists re-fire after 7 days.
 Set `ORCH_MONITOR_ENABLED=0` in the cron line (or shell profile):
 
 ```cron
-*/5 * * * * cd /path/to/repo && ORCH_MONITOR_ENABLED=0 ./orchestrator.sh >> .claude/state/orchestrator.log 2>&1
+*/2 * * * * cd /path/to/repo && ORCH_MONITOR_ENABLED=0 ./orchestrator.sh >> .claude/state/orchestrator.log 2>&1
 ```
 
 When disabled, Phase 7 is skipped entirely and `monitor-sweep.sh` exits immediately
@@ -517,8 +522,8 @@ inspect it. After 3 retries the plan blocks but the worktree stays. Add a
 weekly prune cron alongside the main one:
 
 ```cron
-# Main loop — every 5 minutes
-*/5 * * * * cd /path/to/repo && ./orchestrator.sh >> .claude/state/orchestrator.log 2>&1
+# Main loop — every 2 minutes
+*/2 * * * * cd /path/to/repo && ./orchestrator.sh >> .claude/state/orchestrator.log 2>&1
 
 # Sidecar — prune abandoned worktrees on Sundays at 3am
 0 3 * * 0 cd /path/to/repo && git worktree prune -v >> .claude/state/orchestrator.log 2>&1
