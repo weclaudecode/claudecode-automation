@@ -1293,6 +1293,168 @@ else
   fail "scenario 18 (corrupt run-file breadcrumb)"
 fi
 
+# ─── Scenario 19: unknown model → partial cost + load_errors names model ──
+# Regression for PLAN-09 T2 acceptance #1 + #2: _compute_from_tokens used to
+# silently return 0.0 for any model not in _PRICING_TABLE, leaving the
+# operator with no signal that the pricing table needs updating. The fix
+# logs once per unique unknown model (guarded by a module-level set to
+# bound log noise) AND appends the warning to _recent_load_errors on every
+# encounter — so the api_board errors[] banner stays visible while the
+# condition persists, even after the first log has been deduped.
+echo "--- 19: unknown model → partial cost + load_errors names model ---"
+SCEN19_DIR="$TMPROOT/scen19"
+mkdir -p "$SCEN19_DIR/.claude/plans"
+if KIT_SCRIPTS_DIR="$KIT_SCRIPTS_DIR" SCEN19_DIR="$SCEN19_DIR" run_py <<'PY'; then
+import datetime as _dt
+import json
+import os, sys
+sys.path.insert(0, os.environ["KIT_SCRIPTS_DIR"])
+os.chdir(os.environ["SCEN19_DIR"])
+
+# Use today's UTC date so cost_today picks the runs up — partial total
+# means today_usd ends up at the known-model contribution, not 0.0.
+today = _dt.datetime.now(_dt.timezone.utc).date().isoformat()
+
+state = {
+    "plan_file": ".claude/plans/PLAN-19-unknown.md",
+    "total_tasks": 1,
+    "status": "in_progress",
+    "tasks": {
+        "1": {
+            "title": "task with mixed model usage",
+            "status": "merged",
+            "usage": {
+                "runs": [
+                    {
+                        "kind": "worker",
+                        "model": "claude-mystery-99",
+                        "input_tokens":  1000,
+                        "output_tokens": 500,
+                        "run_at": f"{today}T01:00:00Z",
+                    },
+                    {
+                        "kind": "worker",
+                        "model": "claude-haiku-4-5",
+                        "input_tokens":  1000,
+                        "output_tokens": 500,
+                        "cost_usd": 0.10,
+                        "run_at": f"{today}T02:00:00Z",
+                    },
+                ],
+            },
+        },
+    },
+}
+with open(".claude/plans/PLAN-19-unknown.state.json", "w", encoding="utf-8") as f:
+    json.dump(state, f)
+
+from dashboard import api_costs
+
+api_costs._state_cache.clear()
+api_costs._reset_load_errors()
+api_costs._unknown_models_seen.clear()
+
+result = api_costs.cost_today()
+assert isinstance(result, dict) and result, (
+    f"cost_today must return a populated dict — partial reporting, not crash: {result!r}"
+)
+assert abs(result["today_usd"] - 0.10) < 0.0001, (
+    f"today_usd should be the partial known-model total (0.10 from the haiku run; "
+    f"unknown-model run fell back to 0.0): {result}"
+)
+
+errs = api_costs.load_errors()
+assert errs, (
+    f"load_errors must be non-empty after an unknown model is encountered: {errs!r}"
+)
+matching = [e for e in errs if "claude-mystery-99" in e]
+assert matching, (
+    f"load_errors must name the unknown model 'claude-mystery-99': {errs!r}"
+)
+sys.exit(0)
+PY
+  pass "scenario 19 (unknown model → partial cost + load_errors names model)"
+else
+  fail "scenario 19 (unknown model)"
+fi
+
+# ─── Scenario 20: malformed plan slug → basename fallback + load_errors warn
+# Regression for PLAN-09 T2 acceptance #3: the /api/costs route used to
+# `continue` on IndexError when the plan basename had no hyphens, so a
+# state file with a malformed plan_file silently disappeared from per_task
+# with no operator-visible signal. The fix uses the same basename pattern
+# api_board._plan_slug_short uses (line 184) and reports the malformed slug
+# via load_errors so the operator sees it in the dashboard errors banner.
+echo "--- 20: malformed plan slug → basename fallback + load_errors warns ---"
+SCEN20_DIR="$TMPROOT/scen20"
+mkdir -p "$SCEN20_DIR/.claude/plans"
+cat > "$SCEN20_DIR/.claude/plans/badname.state.json" <<'JSON'
+{
+  "plan_file": ".claude/plans/badname.md",
+  "total_tasks": 1,
+  "status": "in_progress",
+  "tasks": {
+    "1": {
+      "title": "malformed plan",
+      "status": "merged",
+      "usage": {
+        "runs": [
+          {"kind": "worker", "cost_usd": 0.42, "run_at": "2026-05-27T01:00:00Z"}
+        ]
+      }
+    }
+  }
+}
+JSON
+if KIT_SCRIPTS_DIR="$KIT_SCRIPTS_DIR" SCEN20_DIR="$SCEN20_DIR" run_py <<'PY'; then
+import os, sys
+sys.path.insert(0, os.environ["KIT_SCRIPTS_DIR"])
+os.chdir(os.environ["SCEN20_DIR"])
+
+from flask import Flask
+from dashboard import api_costs
+
+api_costs._state_cache.clear()
+api_costs._reset_load_errors()
+api_costs._malformed_slugs_seen.clear()
+
+app = Flask(__name__)
+app.register_blueprint(api_costs.bp)
+client = app.test_client()
+
+resp = client.get("/api/costs")
+assert resp.status_code == 200, f"status: {resp.status_code} body: {resp.data}"
+envelope = resp.get_json()
+assert envelope.get("error") is None, (
+    f"basename fallback must not 500 the route: {envelope}"
+)
+payload = envelope["data"]
+
+assert "badname" in payload["per_task"], (
+    f"basename fallback must surface the plan under its full basename in per_task "
+    f"instead of silently dropping it: {payload['per_task']!r}"
+)
+plan_entry = payload["per_task"]["badname"]
+assert "1" in plan_entry, (
+    f"basename-fallback plan should still carry its tasks: {plan_entry!r}"
+)
+assert abs(plan_entry["1"]["cost_usd"] - 0.42) < 0.0001, (
+    f"cost_for_task should match basename-fallback plan via state-file prefix "
+    f"matching: {plan_entry['1']!r}"
+)
+
+matching = [e for e in payload["errors"] if "badname" in e]
+assert matching, (
+    f"errors[] must warn about the malformed slug 'badname' so the operator "
+    f"sees it on the dashboard banner: {payload['errors']!r}"
+)
+sys.exit(0)
+PY
+  pass "scenario 20 (malformed slug → basename fallback + load_errors warns)"
+else
+  fail "scenario 20 (malformed slug)"
+fi
+
 # ─── Summary ───────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((TESTS_PASSED + TESTS_FAILED))
