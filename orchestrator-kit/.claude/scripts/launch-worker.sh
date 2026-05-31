@@ -168,14 +168,14 @@ unset _AWS_ENV
 
 WORKER_MODEL="${ORCH_WORKER_MODEL:-opus}"
 
-# 5.7a: precedence per-task plan value > $ORCH_MAX_TURNS env > default 30.
+# 5.7a: precedence per-task plan value > $ORCH_MAX_TURNS env > default 60.
 # Use has() rather than `// 30` because jq's // triggers on 0 as well as
 # null, which would silently drop a deliberate max_turns:0 (degenerate but
 # still a real value). Same jq-falsy trap documented at line 84.
 PER_TASK_MAX_TURNS=$(jq -r --arg t "$TASK_NUM" \
   'if (.tasks[$t] // {}) | has("max_turns") then .tasks[$t].max_turns else "" end' \
   "$STATE_FILE")
-MAX_TURNS="${PER_TASK_MAX_TURNS:-${ORCH_MAX_TURNS:-30}}"
+MAX_TURNS="${PER_TASK_MAX_TURNS:-${ORCH_MAX_TURNS:-60}}"
 WORKER_TIMEOUT="${ORCH_WORKER_TIMEOUT:-600}"
 TIMEOUT_CMD=$(find_timeout_cmd)
 
