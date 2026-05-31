@@ -25,6 +25,10 @@ set -uo pipefail
 command -v jq >/dev/null || { echo "plan-status: jq required" >&2; exit 1; }
 command -v gh >/dev/null || { echo "plan-status: gh required" >&2; exit 1; }
 
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
+# shellcheck source=_dispatcher_lib.sh
+source "$REPO_ROOT/.claude/scripts/_dispatcher_lib.sh"
+
 if [ $# -lt 1 ]; then
   echo "usage: $0 <state_file> [<owner/repo>]" >&2
   exit 1
@@ -124,15 +128,21 @@ ${INFLIGHT_BLOCK}
 EOF
 )
 
-# Look for existing status issue (exact title match in repo).
-# Search uses fulltext + filter; cheap on small repos but may need
-# pagination on large ones — accept that limitation for v1.
-EXISTING=$(gh issue list \
-  --repo "$REPO" \
-  --search "\"$TITLE\" in:title" \
-  --state all \
-  --json number,title \
-  --jq ".[] | select(.title == \"$TITLE\") | .number" 2>/dev/null | head -1)
+# Look up the existing status issue. Prefer the canonical reference
+# persisted in state.json (.plan_status_issue, written by this script on
+# first create — PLAN-12 T2). Fall back to the legacy title-grep only when
+# the field is absent (plans ingested before PLAN-12 T2).
+EXISTING=$(jq -r '.plan_status_issue // empty' "$STATE_FILE")
+if [ -z "$EXISTING" ]; then
+  # Search uses fulltext + filter; cheap on small repos but may need
+  # pagination on large ones — accept that limitation for v1.
+  EXISTING=$(gh issue list \
+    --repo "$REPO" \
+    --search "\"$TITLE\" in:title" \
+    --state all \
+    --json number,title \
+    --jq ".[] | select(.title == \"$TITLE\") | .number" 2>/dev/null | head -1)
+fi
 
 if [ -z "$EXISTING" ]; then
   echo "plan-status: creating new status issue '$TITLE'"
@@ -145,6 +155,15 @@ if [ -z "$EXISTING" ]; then
       exit 1
     }
   echo "plan-status: created $CREATED"
+  # Persist the new issue number so subsequent ticks find it without
+  # title-grep and orchestrator.sh can close it on archive (closes #93).
+  # state_write failure is non-fatal — the title-grep fallback above
+  # still works on the next tick.
+  ISSUE_NUM=$(echo "$CREATED" | grep -oE '[0-9]+$' | head -1)
+  if [ -n "$ISSUE_NUM" ]; then
+    state_write "$STATE_FILE" '.plan_status_issue = ($n | tonumber)' --arg n "$ISSUE_NUM" \
+      || echo "plan-status: warning — failed to persist plan_status_issue=$ISSUE_NUM" >&2
+  fi
 else
   echo "plan-status: updating issue #$EXISTING ($TITLE)"
   gh issue edit "$EXISTING" --repo "$REPO" --body "$BODY" >/dev/null 2>&1 || {

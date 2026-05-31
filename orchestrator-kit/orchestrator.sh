@@ -364,11 +364,24 @@ if [ "$ALL_TERMINAL" = "true" ]; then
     --argjson merged "${MERGED_COUNT:-0}" --argjson blocked "${BLOCKED_COUNT:-0}" --argjson total "${TOTAL:-0}" \
     '{plan: $plan, env: $env, status: $status, merged: $merged, blocked: $blocked, total: $total}' 2>/dev/null || echo '{}')"
 
+  # Capture the dashboard issue number BEFORE the state file moves below
+  # so we can close it from the archived state after the mv (closes #93).
+  # Empty when the plan opted out of dashboard tracking or was ingested
+  # before PLAN-12 T2 added the field — close path is silently skipped.
+  PLAN_STATUS_ISSUE=$(jq -r '.plan_status_issue // empty' "$STATE_FILE" 2>/dev/null || echo "")
+
   if state_write "$STATE_FILE" '.status = $s | .completed_at = (now | todateiso8601)' --arg s "$FINAL_STATUS"; then
     mv "$PLAN_FILE" .claude/plans/archive/ 2>/dev/null || \
       echo "warning: could not move plan file to archive (already moved?)" >&2
     mv "$STATE_FILE" .claude/plans/archive/ 2>/dev/null || \
       echo "warning: could not move state file to archive (already moved?)" >&2
+
+    # Auto-close the plan-status dashboard issue. Best-effort — any gh
+    # failure is logged but the archive must succeed regardless.
+    if [ -n "$PLAN_STATUS_ISSUE" ]; then
+      close_plan_status_issue "$PLAN_STATUS_ISSUE" "$PLAN_NUM" "$FINAL_STATUS" \
+        ".claude/plans/archive/$(basename "$STATE_FILE")"
+    fi
   else
     echo "warning: failed to mark plan $FINAL_STATUS in state file — NOT archiving so operator can investigate" >&2
   fi
