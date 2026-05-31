@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import logging
 import os
 import re
 import shlex
@@ -29,9 +30,40 @@ from dashboard.app import json_envelope
 
 bp = Blueprint("workers", __name__)
 
+log = logging.getLogger("dashboard")
+
 _PS_TIMEOUT_SECONDS = 5
+_GIT_REV_PARSE_TIMEOUT_SECONDS = 2
 _ACTIVE_WORKTREES_FILE = ".claude/state/active_worktrees.txt"
 _STATE_DIR = ".claude/state"
+
+
+def _init_repo_root() -> Path:
+    # Resolve the repo root via `git rev-parse --show-toplevel`. Flask is
+    # often launched from outside the repo root (systemd ExecStart, cron
+    # wrappers) — using Path.cwd() there silently produces a tree that
+    # contains no `.claude/state/`, the worker panel goes blank, and the
+    # operator has no signal that the dashboard is mis-anchored. The
+    # subprocess result is cached at module load (see _REPO_ROOT below)
+    # so we pay this cost once per process, not once per /api/workers
+    # request. Falls back to Path.cwd() when git isn't on PATH or we're
+    # not in a work tree — same defensive default as before, but now the
+    # successful case is anchored correctly.
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=_GIT_REV_PARSE_TIMEOUT_SECONDS,
+            check=True,
+        )
+        return Path(proc.stdout.strip())
+    except (FileNotFoundError, subprocess.TimeoutExpired,
+            subprocess.CalledProcessError, OSError):
+        return Path.cwd()
+
+
+_REPO_ROOT: Path = _init_repo_root()
 
 # Last-log preview is rendered into the Active Workers panel as a single
 # line. 200 chars keeps it readable in the narrow worker card without
@@ -202,11 +234,20 @@ def _last_log_for_task(task_n: int) -> str | None:
     # recent meaningful message in the worker's newest run JSON, or None
     # if the file is missing, empty, malformed, or has no surfaceable
     # text. The Active Workers panel treats None as "no preview yet".
+    #
+    # Expected failures (OSError, json.JSONDecodeError, UnicodeDecodeError)
+    # are caught specifically. A WARNING breadcrumb is emitted when a
+    # run-file existed but yielded no preview because JSON decode failed —
+    # without it, an operator looking at an empty `last_log` column has
+    # no way to distinguish "no run-file yet" from "worker wrote garbage".
+    # Anything outside the expected set is still caught (the panel must
+    # never crash on a single bad file) but is logged as a warning so
+    # programmer errors don't get silently swallowed for weeks.
+    state_dir = _REPO_ROOT / _STATE_DIR
+    if not state_dir.is_dir():
+        return None
+
     try:
-        repo_root = Path.cwd()
-        state_dir = repo_root / _STATE_DIR
-        if not state_dir.is_dir():
-            return None
         matches = sorted(
             state_dir.glob(f"run-plan*-t{task_n}-r*.json"),
             key=lambda p: p.stat().st_mtime,
@@ -214,35 +255,66 @@ def _last_log_for_task(task_n: int) -> str | None:
         )
         if not matches:
             return None
-        raw = matches[0].read_text(encoding="utf-8", errors="replace")
-        if not raw.strip():
-            return None
-        # Single-object JSON first (current `--output-format json` shape).
+        run_file = matches[0]
+        raw = run_file.read_text(encoding="utf-8", errors="replace")
+    except (OSError, UnicodeDecodeError) as e:
+        log.warning(
+            "api_workers: failed reading run-file for task %s in %s: %s: %s",
+            task_n, state_dir, type(e).__name__, e,
+        )
+        return None
+    except Exception as e:  # noqa: BLE001 — defensive panel boundary
+        log.warning(
+            "api_workers: unexpected error listing run-files for task %s: %s: %s",
+            task_n, type(e).__name__, e,
+        )
+        return None
+
+    if not raw.strip():
+        return None
+
+    decode_errors = 0
+
+    # Single-object JSON first (current `--output-format json` shape).
+    try:
+        doc = json.loads(raw)
+    except json.JSONDecodeError:
+        doc = None
+        decode_errors += 1
+    except Exception as e:  # noqa: BLE001 — defensive panel boundary
+        log.warning(
+            "api_workers: unexpected json.loads error on %s: %s: %s",
+            run_file, type(e).__name__, e,
+        )
+        return None
+
+    if doc is not None:
+        preview = _meaningful_text_from_event(doc)
+        if preview:
+            return _trim_to_one_line(preview)
+
+    # JSONL fallback (future stream-json output). Walk from the tail
+    # so we surface the most recent event, not the first.
+    for line in reversed(raw.splitlines()):
+        stripped = line.strip()
+        if not stripped:
+            continue
         try:
-            doc = json.loads(raw)
+            event = json.loads(stripped)
         except json.JSONDecodeError:
-            doc = None
-        if doc is not None:
-            preview = _meaningful_text_from_event(doc)
-            if preview:
-                return _trim_to_one_line(preview)
-        # JSONL fallback (future stream-json output). Walk from the tail
-        # so we surface the most recent event, not the first.
-        for line in reversed(raw.splitlines()):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                event = json.loads(stripped)
-            except json.JSONDecodeError:
-                continue
-            preview = _meaningful_text_from_event(event)
-            if preview:
-                return _trim_to_one_line(preview)
-        return None
-    except Exception:
-        # Defensive: one corrupt run file must not crash the panel.
-        return None
+            decode_errors += 1
+            continue
+        preview = _meaningful_text_from_event(event)
+        if preview:
+            return _trim_to_one_line(preview)
+
+    if decode_errors > 0:
+        log.warning(
+            "api_workers: %s for task %s has %d JSON decode error(s); "
+            "no preview surfaced — file may be corrupt or mid-write",
+            run_file, task_n, decode_errors,
+        )
+    return None
 
 
 def _list_processes() -> tuple[list[dict], str | None]:
@@ -297,16 +369,21 @@ def _derive_branch_and_task(path: str) -> tuple[str | None, int | None]:
     return f"claude/plan-{plan_n}-task-{task_n}", int(task_n)
 
 
-def _list_worktrees() -> list[dict]:
-    repo_root = Path.cwd()
+def _list_worktrees() -> tuple[list[dict], str | None]:
+    # Returns (worktrees, error). `error` is None on the happy path and
+    # `"<relpath>: <ExceptionType>: <msg>"` when the manifest exists but
+    # can't be read — the /api/workers route folds that string into the
+    # data.errors[] channel so a permissions glitch or a corrupt manifest
+    # doesn't silently empty the Active Worktrees panel.
+    repo_root = _REPO_ROOT
     manifest = repo_root / _ACTIVE_WORKTREES_FILE
     if not manifest.exists():
-        return []
+        return [], None
     out: list[dict] = []
     try:
         raw_lines = manifest.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return []
+    except OSError as e:
+        return [], f"{_ACTIVE_WORKTREES_FILE}: {type(e).__name__}: {e}"
     for raw in raw_lines:
         line = raw.strip()
         if not line:
@@ -347,12 +424,27 @@ def _list_worktrees() -> list[dict]:
             "task_n": task_n,
             "last_log": _last_log_for_task(task_n) if task_n is not None else None,
         })
-    return out
+    return out, None
 
 
 @bp.route("/api/workers")
 def workers():
-    processes, err = _list_processes()
-    worktrees = _list_worktrees()
-    data = {"processes": processes, "active_worktrees": worktrees}
-    return jsonify(json_envelope(data=data, error=err))
+    # Per-source failures are folded into data["errors"] (list[str]) so
+    # they surface alongside the data the frontend actually reads. The
+    # envelope's top-level `error` field is left null on purpose: the
+    # board.js renderer (and the workers panel renderer in dashboard.js)
+    # ignore envelope.error when data is also present, so any per-source
+    # failure routed there was effectively invisible to the operator.
+    processes, proc_err = _list_processes()
+    worktrees, manifest_err = _list_worktrees()
+    errors: list[str] = []
+    if proc_err:
+        errors.append(f"processes: {proc_err}")
+    if manifest_err:
+        errors.append(f"worktrees: {manifest_err}")
+    data = {
+        "processes": processes,
+        "active_worktrees": worktrees,
+        "errors": errors,
+    }
+    return jsonify(json_envelope(data=data))

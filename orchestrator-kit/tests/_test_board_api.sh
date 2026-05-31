@@ -1101,6 +1101,198 @@ else
   fail "scenario 16 (per-file catch)"
 fi
 
+# ─── Scenario 17: /api/workers — repo-root anchoring works regardless of cwd
+# Regression for PLAN-09 T1 acceptance #1: previously _last_log_for_task and
+# _list_worktrees used Path.cwd() to find .claude/state — fragile when Flask
+# is launched from outside the repo root (systemd ExecStart, cron). The fix
+# caches a `_REPO_ROOT` resolved via `git rev-parse --show-toplevel` at
+# module load. This test verifies the helpers honour _REPO_ROOT instead of
+# the live cwd by monkey-patching the module-level constant to point at a
+# tmpdir, then chdir'ing somewhere unrelated and checking the helpers still
+# find the manifest + run-file in the patched root.
+echo "--- 17: api_workers repo-root anchoring honours _REPO_ROOT, not Path.cwd() ---"
+SCEN17_DIR="$TMPROOT/scen17"
+mkdir -p "$SCEN17_DIR/.claude/state"
+# Active worktrees manifest pointing at a path that exists under the patched
+# root — _list_worktrees skips entries whose `resolved` Path doesn't exist,
+# so the directory must actually be on disk for the row to render.
+mkdir -p "$SCEN17_DIR/wt-plan99-t7"
+echo "wt-plan99-t7" > "$SCEN17_DIR/.claude/state/active_worktrees.txt"
+# A run-file matching the worker's glob — used by _last_log_for_task to
+# build the last_log preview for task 7.
+cat > "$SCEN17_DIR/.claude/state/run-plan99-t7-r1.json" <<'JSON'
+{"type": "result", "result": "anchored preview", "is_error": false}
+JSON
+if KIT_SCRIPTS_DIR="$KIT_SCRIPTS_DIR" SCEN17_DIR="$SCEN17_DIR" run_py <<'PY'; then
+import os, sys
+from pathlib import Path
+sys.path.insert(0, os.environ["KIT_SCRIPTS_DIR"])
+# Chdir somewhere with NO `.claude/state/` so a regression to Path.cwd()
+# would yield empty results and the assertions would fail.
+os.chdir("/")
+from dashboard import api_workers
+
+# Override the module-level cache — this is the contract a Flask process
+# would get if launched from outside the repo root: _init_repo_root() ran
+# at import time, the value is sticky, and request-time cwd changes don't
+# leak into helper behaviour.
+api_workers._REPO_ROOT = Path(os.environ["SCEN17_DIR"])
+
+# ── _last_log_for_task honours _REPO_ROOT ──────────────────────────────
+preview = api_workers._last_log_for_task(7)
+assert preview == "anchored preview", (
+    f"_last_log_for_task should resolve against _REPO_ROOT, not Path.cwd(); "
+    f"got {preview!r}"
+)
+
+# ── _list_worktrees honours _REPO_ROOT and returns (worktrees, err) ────
+worktrees, manifest_err = api_workers._list_worktrees()
+assert manifest_err is None, (
+    f"manifest read should succeed on clean fixture: {manifest_err!r}"
+)
+assert len(worktrees) == 1, (
+    f"_list_worktrees should resolve manifest against _REPO_ROOT and "
+    f"return the one valid entry; got {worktrees!r}"
+)
+entry = worktrees[0]
+assert entry["task_n"] == 7, f"task_n parse: {entry!r}"
+assert entry["branch"] == "claude/plan-99-task-7", f"branch derive: {entry!r}"
+assert entry["last_log"] == "anchored preview", (
+    f"last_log should reflect anchored preview: {entry!r}"
+)
+
+# ── /api/workers route surfaces data.errors as a list, envelope.error None
+from flask import Flask
+app = Flask(__name__)
+app.register_blueprint(api_workers.bp)
+client = app.test_client()
+resp = client.get("/api/workers")
+assert resp.status_code == 200, f"status: {resp.status_code}"
+envelope = resp.get_json()
+assert envelope.get("error") is None, (
+    f"happy path must NOT set envelope.error — per-source failures route to "
+    f"data.errors[] instead: {envelope!r}"
+)
+payload = envelope["data"]
+for k in ("processes", "active_worktrees", "errors"):
+    assert k in payload, f"payload missing key {k!r}: {payload}"
+assert isinstance(payload["errors"], list), (
+    f"errors must be a list (string list convention): {payload['errors']!r}"
+)
+assert payload["active_worktrees"], (
+    f"active_worktrees should contain the anchored entry: {payload!r}"
+)
+sys.exit(0)
+PY
+  pass "scenario 17 (api_workers honours _REPO_ROOT regardless of cwd)"
+else
+  fail "scenario 17 (api_workers repo-root anchoring)"
+fi
+
+# ─── Scenario 18: corrupt run-file does NOT crash, DOES leave a breadcrumb
+# Regression for PLAN-09 T1 acceptance #2: the bare `except Exception` in
+# _last_log_for_task swallowed every failure silently — including the case
+# where a worker wrote a half-flushed or otherwise unparseable run-file,
+# leaving the operator with an empty `last_log` column and no diagnostic.
+# The fix narrows the catch to (OSError, JSONDecodeError, UnicodeDecodeError)
+# and emits a WARNING log when JSON decode failures yielded no preview, so
+# corrupt run-files leave a paper trail in the dashboard log.
+echo "--- 18: corrupt run-file → returns None + emits log breadcrumb ---"
+SCEN18_DIR="$TMPROOT/scen18"
+mkdir -p "$SCEN18_DIR/.claude/state"
+# A truly unparseable run-file: starts with `{`, no closing brace, and the
+# body isn't valid JSONL either. Both the single-object json.loads AND every
+# JSONL fallback line will raise JSONDecodeError.
+cat > "$SCEN18_DIR/.claude/state/run-plan99-t8-r1.json" <<'JSON'
+{ this is not valid json
+and neither is this line
+JSON
+if KIT_SCRIPTS_DIR="$KIT_SCRIPTS_DIR" SCEN18_DIR="$SCEN18_DIR" run_py <<'PY'; then
+import io, logging, os, sys
+from pathlib import Path
+sys.path.insert(0, os.environ["KIT_SCRIPTS_DIR"])
+from dashboard import api_workers
+
+api_workers._REPO_ROOT = Path(os.environ["SCEN18_DIR"])
+
+# Capture the dashboard logger's output so we can assert on the breadcrumb.
+buf = io.StringIO()
+handler = logging.StreamHandler(buf)
+handler.setLevel(logging.WARNING)
+handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+dash_log = logging.getLogger("dashboard")
+prior_level = dash_log.level
+dash_log.addHandler(handler)
+dash_log.setLevel(logging.WARNING)
+
+try:
+    result = api_workers._last_log_for_task(8)
+finally:
+    dash_log.removeHandler(handler)
+    dash_log.setLevel(prior_level)
+
+# ── Panel must NOT crash: result is None, not an exception ─────────────
+assert result is None, (
+    f"corrupt run-file must yield None (not raise, not return garbage); "
+    f"got {result!r}"
+)
+
+# ── Breadcrumb must be emitted ─────────────────────────────────────────
+log_output = buf.getvalue()
+assert "WARNING" in log_output, (
+    f"corrupt run-file must emit a WARNING-level breadcrumb so the "
+    f"operator sees that a run-file was unparseable; got:\n{log_output!r}"
+)
+assert "api_workers" in log_output, (
+    f"breadcrumb should be tagged with the api_workers module so logs "
+    f"are grep-able: {log_output!r}"
+)
+assert "decode" in log_output.lower() or "corrupt" in log_output.lower(), (
+    f"breadcrumb should mention the decode failure / corruption: "
+    f"{log_output!r}"
+)
+assert "run-plan99-t8-r1.json" in log_output, (
+    f"breadcrumb should name the specific run-file so the operator can "
+    f"locate it: {log_output!r}"
+)
+
+# ── /api/workers must still 200 with the bad file in place ─────────────
+# The route reads _list_worktrees + _list_processes; neither calls
+# _last_log_for_task for a task_n that isn't in the manifest. To exercise
+# the route end-to-end with the corrupt file in scope we add a manifest
+# entry that derives task_n=8, which forces _last_log_for_task to run.
+# The route must STILL return 200 and a valid envelope.
+os.makedirs(api_workers._REPO_ROOT / "wt-plan99-t8", exist_ok=True)
+(api_workers._REPO_ROOT / ".claude/state/active_worktrees.txt").write_text(
+    "wt-plan99-t8\n", encoding="utf-8"
+)
+
+from flask import Flask
+app = Flask(__name__)
+app.register_blueprint(api_workers.bp)
+client = app.test_client()
+resp = client.get("/api/workers")
+assert resp.status_code == 200, (
+    f"panel must not crash on a corrupt run-file; status={resp.status_code} "
+    f"body={resp.data!r}"
+)
+envelope = resp.get_json()
+payload = envelope["data"]
+# The worktree row renders, and its last_log is None — not an exception.
+assert len(payload["active_worktrees"]) == 1, (
+    f"corrupt run-file must not nuke the worktrees panel: {payload!r}"
+)
+assert payload["active_worktrees"][0]["last_log"] is None, (
+    f"corrupt run-file must yield last_log=None on the rendered row: "
+    f"{payload['active_worktrees'][0]!r}"
+)
+sys.exit(0)
+PY
+  pass "scenario 18 (corrupt run-file → None + WARNING breadcrumb, panel renders)"
+else
+  fail "scenario 18 (corrupt run-file breadcrumb)"
+fi
+
 # ─── Summary ───────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((TESTS_PASSED + TESTS_FAILED))
