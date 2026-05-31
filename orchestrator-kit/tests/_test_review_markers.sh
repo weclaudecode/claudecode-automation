@@ -1,24 +1,28 @@
 #!/usr/bin/env bash
-# Tests for review-pass.sh marker extraction (the regex pair at
-# orchestrator-kit/.claude/scripts/review-pass.sh:148-160).
+# Tests for review-pass.sh AND iterate-pass.sh marker extraction (the regex
+# pairs at orchestrator-kit/.claude/scripts/review-pass.sh:148-160 and
+# orchestrator-kit/.claude/scripts/iterate-pass.sh:136-148).
 #
 # Background
 # ----------
 # The earlier regex `orch:review-sha:[a-f0-9]+` matched any occurrence in
 # the PR body — including bare strings that ended up inside fenced code
 # blocks (e.g. PLAN-07 T1 reproduced a PR-body shadow where a code-block
-# sample marker beat the real one). The reader now requires the same
+# sample marker beat the real one). Both readers now require the same
 # `<!-- ... -->` delimiters the writer emits at review-pr.sh:464.
 #
-# This test pins the contract on both markers:
+# This test pins the contract on both markers, in both scripts:
 #   * `orch:review-sha:HEX` in body prose or inside backticks is NOT picked
 #     up by the extractor.
 #   * `<!-- orch:review-sha:HEX -->` later in the body IS picked up.
 #   * Same for `orch:ci-gate-sha:HEX`.
+#   * The iterate-pass.sh extraction is byte-identical to review-pass.sh
+#     (PLAN-11 T1 sibling fix), so a drift in either script fails T7.
 #
-# The grep pipeline is copied verbatim from review-pass.sh so a drift in
-# either copy will fail this test loudly. If you change the script's regex,
-# update both copies (orchestrator-kit/ and .claude/) and this test.
+# The grep pipelines are copied verbatim from the scripts so a drift in
+# any copy will fail this test loudly. If you change either script's regex,
+# update all copies (orchestrator-kit/ and .claude/ for both scripts) and
+# this test.
 #
 # Usage: bash orchestrator-kit/tests/_test_review_markers.sh
 # Exit:  0 = all pass, 1 = any failure. No external deps beyond `grep`.
@@ -38,6 +42,24 @@ extract_review_sha() {
 }
 
 extract_ci_gate_sha() {
+  echo "$1" \
+    | grep -oE '<!-- *orch:ci-gate-sha:[a-f0-9]+ *-->' \
+    | head -1 \
+    | grep -oE '[a-f0-9]{7,40}'
+}
+
+# ─── Helpers under test (mirrors iterate-pass.sh:142-149) ────────────────
+# Byte-identical to the review-pass.sh helpers above; redefined to give
+# iterate-pass scenarios their own callsite so future drift in either
+# script is caught independently.
+extract_review_sha_iterate() {
+  echo "$1" \
+    | grep -oE '<!-- *orch:review-sha:[a-f0-9]+ *-->' \
+    | head -1 \
+    | grep -oE '[a-f0-9]{7,40}'
+}
+
+extract_ci_gate_sha_iterate() {
   echo "$1" \
     | grep -oE '<!-- *orch:ci-gate-sha:[a-f0-9]+ *-->' \
     | head -1 \
@@ -121,6 +143,80 @@ if [ -z "$T6_GOT" ]; then
 else
   fail "T6: expected empty, got '$T6_GOT'"
 fi
+
+# ─── T7: iterate-pass copy — same shadow protection on review-sha ────────
+# PLAN-11 T1: iterate-pass.sh historically used the loose single-stage
+# regex (`grep -oE 'orch:review-sha:[a-f0-9]+' | head -1 | cut -d: -f3`).
+# After the sibling fix, it mirrors review-pass.sh exactly — replay T1's
+# fixture body through the iterate helper to lock that contract in place.
+echo "--- T7: iterate-pass review-sha extractor ignores bare in-prose form ---"
+T7_BODY=$(cat <<'BODY'
+## Summary
+
+Adds a marker that looks like `orch:review-sha:cafef00d` for documentation.
+
+Some other prose here.
+
+<!-- orch:review-iter:2 -->
+<!-- orch:review-sha:deadbeef1234567 -->
+BODY
+)
+T7_GOT=$(extract_review_sha_iterate "$T7_BODY")
+if [ "$T7_GOT" = "deadbeef1234567" ]; then
+  pass "T7: iterate-pass extracted real marker '$T7_GOT', ignored bare 'cafef00d'"
+else
+  fail "T7: expected 'deadbeef1234567', got '$T7_GOT'"
+fi
+
+# ─── T8: iterate-pass copy — same shadow protection on ci-gate-sha ───────
+echo "--- T8: iterate-pass ci-gate-sha extractor ignores bare in-prose form ---"
+T8_BODY=$(cat <<'BODY'
+Some `orch:ci-gate-sha:1111111` mentioned in a code block.
+<!-- orch:ci-gate-sha:abcdef9876543 -->
+BODY
+)
+T8_GOT=$(extract_ci_gate_sha_iterate "$T8_BODY")
+if [ "$T8_GOT" = "abcdef9876543" ]; then
+  pass "T8: iterate-pass ci-gate-sha extracted real marker '$T8_GOT'"
+else
+  fail "T8: expected 'abcdef9876543', got '$T8_GOT'"
+fi
+
+# ─── T9: source-file drift check — both scripts carry the tightened regex
+# This is the actual anti-drift guard. Helpers above only test what the
+# test thinks the regex should be; T9 reads the scripts on disk and fails
+# if either copy of either script still has the loose single-stage form
+# or has lost the comment-delimited form.
+echo "--- T9: on-disk scripts use the tightened two-stage regex ---"
+# Locate the kit root: tests live at orchestrator-kit/tests/.
+THIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+KIT_ROOT="$(cd "$THIS_DIR/.." && pwd -P)"
+REPO_ROOT="$(cd "$KIT_ROOT/.." && pwd -P)"
+
+drift_check() {
+  local label="$1" path="$2"
+  if [ ! -f "$path" ]; then
+    # Missing copy is not a failure — the installed-target copy under
+    # repo-root .claude/scripts/ may legitimately not exist in this checkout.
+    pass "T9[$label]: (skip) file not present at $path"
+    return 0
+  fi
+  if grep -qE "grep -oE '<!-- \*orch:review-sha:\[a-f0-9\]\+ \*-->'" "$path" \
+     && grep -qE "grep -oE '<!-- \*orch:ci-gate-sha:\[a-f0-9\]\+ \*-->'" "$path"; then
+    pass "T9[$label]: comment-delimited regex present in $path"
+  else
+    fail "T9[$label]: tightened regex missing in $path"
+  fi
+  if grep -qE "grep -oE 'orch:review-sha:\[a-f0-9\]\+' \| head -1 \| cut -d: -f3" "$path" \
+     || grep -qE "grep -oE 'orch:ci-gate-sha:\[a-f0-9\]\+' \| head -1 \| cut -d: -f3" "$path"; then
+    fail "T9[$label]: legacy loose single-stage regex still present in $path"
+  fi
+}
+
+drift_check "kit/review-pass"     "$KIT_ROOT/.claude/scripts/review-pass.sh"
+drift_check "kit/iterate-pass"    "$KIT_ROOT/.claude/scripts/iterate-pass.sh"
+drift_check "target/review-pass"  "$REPO_ROOT/.claude/scripts/review-pass.sh"
+drift_check "target/iterate-pass" "$REPO_ROOT/.claude/scripts/iterate-pass.sh"
 
 echo
 if [ "$TESTS_FAILED" -eq 0 ]; then
