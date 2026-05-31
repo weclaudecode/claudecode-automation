@@ -135,8 +135,19 @@ while read -r task_num pr_num; do
 
   HEAD_OID=$(echo "$PR_INFO" | jq -r '.headRefOid')
   PR_BODY=$(echo "$PR_INFO" | jq -r '.body // ""')
-  LAST_SHA=$(echo "$PR_BODY" | grep -oE 'orch:review-sha:[a-f0-9]+' | head -1 | cut -d: -f3)
-  LAST_CI_GATE_SHA=$(echo "$PR_BODY" | grep -oE 'orch:ci-gate-sha:[a-f0-9]+' | head -1 | cut -d: -f3)
+  # Require the full HTML-comment delimiters so a bare `orch:review-sha:HEX`
+  # appearing inside PR-body prose or a fenced code block can't shadow the
+  # real marker emitted by review-pr.sh / review-pass.sh. Stage 1 matches the
+  # delimited form; stage 2 lifts the hex (7-40 chars: short refs through
+  # full SHAs). Sibling of the review-pass.sh:154-161 fix (PR #72 / PLAN-08 T1).
+  LAST_SHA=$(echo "$PR_BODY" \
+    | grep -oE '<!-- *orch:review-sha:[a-f0-9]+ *-->' \
+    | head -1 \
+    | grep -oE '[a-f0-9]{7,40}')
+  LAST_CI_GATE_SHA=$(echo "$PR_BODY" \
+    | grep -oE '<!-- *orch:ci-gate-sha:[a-f0-9]+ *-->' \
+    | head -1 \
+    | grep -oE '[a-f0-9]{7,40}')
 
   # Either marker matching HEAD proves we have fresh feedback on the
   # current commit. review-sha = LLM review (review-pr.sh); ci-gate-sha =
