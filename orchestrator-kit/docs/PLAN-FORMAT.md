@@ -266,9 +266,15 @@ than the global default to converge.
 ```
 
 Precedence: per-task `max_turns:` in the plan beats `$ORCH_MAX_TURNS`
-env beats the built-in default of 30. The env var stays useful as a
+env beats the built-in default of 60. The env var stays useful as a
 one-off global override during debugging; plans should set the value
 explicitly when a task is reliably tight against the default.
+
+> The built-in default was bumped from 30 to 60 after the 2026-05-30/31
+> dogfood session, where three workers across PLAN-07/08/09 hit the
+> `max_turns=30` cap on bigger-scope tasks before reaching commit+push.
+> Empirical landing zone for the rescued tasks was 50-65 turns, so 60
+> makes the common case land first try without operator rescue.
 
 ### `acceptance: [...]`
 
