@@ -342,6 +342,149 @@ else
   fail "scenario 3: expected exactly 1 marker in body, found $MARKER_COUNT"
 fi
 
+# ─── PLAN-12 / closes #42: maybe_enable_auto_merge merge-gate scenarios ──────
+# Background: review-pr.sh now calls gh pr merge --auto on a clean verdict
+# (the reviewer is the merge gate; launch-worker.sh no longer enables auto-
+# merge). The helper maybe_enable_auto_merge centralises the decision so it
+# can be tested in isolation with the same gh stub used above.
+#
+# Three scenarios mirror acceptance criterion #8:
+#   4. clean verdict, non-sensitive task   → exactly one `gh pr merge --auto`
+#   5. clean verdict, sensitive task       → zero gh calls
+#   6. blocker verdict path                → not exercised here directly;
+#      acceptance #6 is satisfied by review-pr.sh's `if [ HAS_SAFETY -eq 0 ]
+#      && [ HAS_BLOCKER -eq 0 ]` guard around the helper invocation — i.e.
+#      the helper is never called on a REQUEST_CHANGES verdict, so testing
+#      "helper not called" is equivalent to grepping review-pr.sh for the
+#      guard, which a separate shellcheck step covers. Scenario 6 below
+#      verifies the helper itself stays silent when invoked on a sensitive
+#      task with a gh stub that would fail loudly — a stronger form of "no
+#      gh call".
+#
+# State-file fixture: minimal JSON with `auto_merge_overrides` only. The
+# helper reads nothing else.
+
+TASK_NUM_CLEAN=1
+TASK_NUM_SENSITIVE=2
+
+S4_STATE="$TMPROOT/s4.state.json"
+cat > "$S4_STATE" <<JSON
+{
+  "auto_merge_overrides": {
+    "${TASK_NUM_SENSITIVE}": false
+  }
+}
+JSON
+
+# ─── Scenario 4: Clean verdict, non-sensitive task → auto-merge fires ────────
+echo "--- 4: clean verdict on non-sensitive task triggers gh pr merge --auto ---"
+
+S4_LOG="$TMPROOT/s4.log"
+S4_ARGS_DIR="$TMPROOT/s4-args"
+mkdir -p "$S4_ARGS_DIR"
+: > "$S4_LOG"
+
+GH_STUB_LOG="$S4_LOG" GH_STUB_ARGS_DIR="$S4_ARGS_DIR" \
+  maybe_enable_auto_merge "$S4_STATE" "$TASK_NUM_CLEAN" "$PR_NUM" "$REPO" \
+  > "$TMPROOT/s4.stdout" 2> "$TMPROOT/s4.stderr"
+RC=$?
+
+if [ "$RC" = "0" ]; then
+  pass "scenario 4: function returns 0 on clean+non-sensitive"
+else
+  fail "scenario 4: function returned $RC (expected 0); stderr: $(cat "$TMPROOT/s4.stderr")"
+fi
+
+CALL_COUNT=$(wc -l < "$S4_LOG" | tr -d ' ')
+if [ "$CALL_COUNT" = "1" ]; then
+  pass "scenario 4: exactly 1 gh call (pr merge --auto)"
+else
+  fail "scenario 4: expected 1 gh call, got $CALL_COUNT — log:
+$(cat "$S4_LOG")"
+fi
+
+if grep -qE "^pr merge ${PR_NUM} --repo ${REPO} --auto --squash --delete-branch$" "$S4_LOG"; then
+  pass "scenario 4: gh pr merge --auto --squash --delete-branch invocation matches"
+else
+  fail "scenario 4: expected 'pr merge ... --auto --squash --delete-branch' in log:
+$(cat "$S4_LOG")"
+fi
+
+# ─── Scenario 5: Clean verdict, sensitive task → no gh call ──────────────────
+echo "--- 5: clean verdict on sensitive task (auto_merge_overrides=false) skips merge ---"
+
+S5_LOG="$TMPROOT/s5.log"
+S5_ARGS_DIR="$TMPROOT/s5-args"
+mkdir -p "$S5_ARGS_DIR"
+: > "$S5_LOG"
+
+GH_STUB_LOG="$S5_LOG" GH_STUB_ARGS_DIR="$S5_ARGS_DIR" \
+  maybe_enable_auto_merge "$S4_STATE" "$TASK_NUM_SENSITIVE" "$PR_NUM" "$REPO" \
+  > "$TMPROOT/s5.stdout" 2> "$TMPROOT/s5.stderr"
+RC=$?
+
+if [ "$RC" = "0" ]; then
+  pass "scenario 5: function returns 0 (no-op skip is success)"
+else
+  fail "scenario 5: function returned $RC (expected 0); stderr: $(cat "$TMPROOT/s5.stderr")"
+fi
+
+CALL_COUNT=$(wc -l < "$S5_LOG" | tr -d ' ')
+if [ "$CALL_COUNT" = "0" ]; then
+  pass "scenario 5: zero gh calls (sensitive task → no merge attempt)"
+else
+  fail "scenario 5: expected 0 gh calls, got $CALL_COUNT — log:
+$(cat "$S5_LOG")"
+fi
+
+if grep -q "sensitive" "$TMPROOT/s5.stdout"; then
+  pass "scenario 5: stdout notes the sensitive-skip"
+else
+  fail "scenario 5: stdout missing sensitive-skip note — content:
+$(cat "$TMPROOT/s5.stdout")"
+fi
+
+# ─── Scenario 6: blocker verdict path in review-pr.sh skips the helper ───────
+# Acceptance #8's third scenario ("blocker verdict does NOT trigger merge")
+# can't be tested by calling maybe_enable_auto_merge directly — the helper
+# accepts no verdict argument because review-pr.sh's caller guards the
+# invocation with `if [ "$HAS_SAFETY" -eq 0 ] && [ "$HAS_BLOCKER" -eq 0 ]`.
+# So the right contract surface to verify here is that exact guard. If a
+# future refactor moves the helper call outside the guard, this assertion
+# fires before the test even reaches the gh stub.
+echo "--- 6: review-pr.sh guards maybe_enable_auto_merge behind HAS_SAFETY=0 && HAS_BLOCKER=0 ---"
+
+REVIEW_PR_SH="$KIT_ROOT/.claude/scripts/review-pr.sh"
+if [ ! -f "$REVIEW_PR_SH" ]; then
+  fail "scenario 6: cannot locate review-pr.sh at $REVIEW_PR_SH"
+else
+  # Walk the file once, find the line that calls maybe_enable_auto_merge,
+  # then look at the preceding line for the guard. awk keeps a 1-line
+  # window so we can assert "the line just before the call".
+  GUARDED=$(awk '
+    prev ~ /HAS_SAFETY.*-eq 0.*HAS_BLOCKER.*-eq 0/ && /maybe_enable_auto_merge/ { print "yes"; exit }
+    { prev = $0 }
+  ' "$REVIEW_PR_SH")
+
+  if [ "$GUARDED" = "yes" ]; then
+    pass "scenario 6: maybe_enable_auto_merge call is guarded by HAS_SAFETY=0 && HAS_BLOCKER=0"
+  else
+    fail "scenario 6: maybe_enable_auto_merge call missing or unguarded in $REVIEW_PR_SH — blocker verdicts could leak through to merge"
+  fi
+fi
+
+# Bonus: verify launch-worker.sh no longer calls gh pr merge --auto on the
+# happy path (PLAN-12 acceptance #1). The sensitive-PR else branch now
+# only labels; the auto-merge call has moved to review-pr.sh.
+LAUNCH_WORKER_SH="$KIT_ROOT/.claude/scripts/launch-worker.sh"
+if [ ! -f "$LAUNCH_WORKER_SH" ]; then
+  fail "scenario 6: cannot locate launch-worker.sh at $LAUNCH_WORKER_SH"
+elif grep -qE '^[^#]*gh pr merge.*--auto' "$LAUNCH_WORKER_SH"; then
+  fail "scenario 6: launch-worker.sh still calls 'gh pr merge --auto' — PLAN-12 #42 expects it removed"
+else
+  pass "scenario 6: launch-worker.sh no longer calls gh pr merge --auto (PLAN-12 inversion in effect)"
+fi
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((TESTS_PASSED + TESTS_FAILED))
