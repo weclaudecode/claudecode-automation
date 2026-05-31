@@ -578,3 +578,19 @@ a { color: inherit; text-decoration: none; }
 .nav .meta.stale {
   color: var(--col-blocked);
 }
+
+/* Progressive stale-data degradation (PLAN-09 T4) — board.js's 1-second
+   updateStaleness ticker adds .panel-stale to .main after STALE_DIM_MS
+   (30 s) of no successful poll, dimming every panel inside .main so the
+   last-known-good payload visibly stops looking live. The nav (with the
+   live-dot) and the .alerts strip sit outside .main and keep their
+   normal colour — the failure signal stays prominent while the rotting
+   data fades. prefers-reduced-motion already disables the transition
+   globally via the media query above. */
+.main .panel {
+  transition: filter 0.6s ease, opacity 0.6s ease;
+}
+.main.panel-stale .panel {
+  filter: saturate(0.25) brightness(0.85);
+  opacity: 0.7;
+}

@@ -19,6 +19,20 @@ const POLL_INTERVAL_MS = 5000;
 const ENDPOINT = "/api/board";
 const DICEBEAR_BASE = "https://api.dicebear.com/8.x/bottts/svg";
 
+/* Progressive stale-data degradation thresholds — measured from the last
+   successful poll, not from the backend's as_of. The 1-second ticker
+   (updateStaleness) layers three signals so operators can't mistake a
+   frozen panel for live data:
+     - always: timestamp gains a parenthetical age (Ns ago / Nm ago)
+     - >= STALE_DIM_MS: .main gains panel-stale, dimming all panels
+     - >= STALE_COST_MS: cost headline is replaced with the literal "stale"
+   See PLAN-09 Task 4 — pre-PLAN-09 the only failure signal was the live-dot
+   colour and the alerts-strip, which operators kept missing while the
+   underlying payload sat unchanged with a frozen "updated 10:30:42" label. */
+const STALENESS_TICK_MS = 1000;
+const STALE_DIM_MS = 30000;
+const STALE_COST_MS = 120000;
+
 const COLUMN_DEFS = [
   { key: "backlog",          label: "Backlog" },
   { key: "todo",             label: "Todo", scroll: true },
@@ -41,6 +55,18 @@ const SCROLL_PANEL_IDS = ["log-tail", "activity"];
    This preserves the operator's last-known-good view across short
    outages. Reset by renderLoadingState (cold start, 404). */
 let hasRenderedSuccessfully = false;
+
+/* Wall-clock timestamp (Date.now()) of the last successful renderAll.
+   Null before first successful paint and after any renderLoadingState
+   wipe. updateStaleness reads this every second to compute the visible
+   age and drive progressive degradation. */
+let _lastSuccessAt = null;
+
+/* Base text of the nav-as-of label ("updated 10:30:42") that
+   updateStaleness re-appends the parenthetical age onto each tick.
+   Kept separate from the DOM textContent so the timestamp ages
+   monotonically between polls without re-parsing the visible string. */
+let _navAsOfBase = "";
 
 /* DiceBear avatar palette — used by initials-on-color SVG fallback when
    DiceBear is unreachable. Hash(name) % palette picks a stable color
@@ -607,7 +633,8 @@ function renderAll(payload) {
 
   const meta = payload || {};
   const asOf = meta.as_of ? shortTime(meta.as_of) : "—";
-  $("nav-as-of").textContent = "updated " + asOf;
+  _navAsOfBase = "updated " + asOf;
+  $("nav-as-of").textContent = _navAsOfBase;
   const planSummary = (meta.plan_status || []).map((p) => p.plan).filter(Boolean);
   $("nav-plan").textContent = planSummary.length
     ? "plan: " + planSummary.join(", ")
@@ -645,6 +672,14 @@ function renderAll(payload) {
   }
   restoreFocus(focusSnap);
   hasRenderedSuccessfully = true;
+
+  /* Recovery path — a fresh successful payload resets staleness state.
+     The next updateStaleness tick will overwrite the parenthetical age
+     with "(0s ago)", and the cost headline rebuilt by renderCost above
+     already cleared any earlier "stale" override. */
+  _lastSuccessAt = Date.now();
+  const mainEl = document.querySelector(".main");
+  if (mainEl) mainEl.classList.remove("panel-stale");
 }
 
 function renderLoadingState(message) {
@@ -666,6 +701,12 @@ function renderLoadingState(message) {
     if (el) while (el.firstChild) el.removeChild(el.firstChild);
   }
   hasRenderedSuccessfully = false;
+  /* Panels are wiped — staleness display would be meaningless. Reset
+     so updateStaleness no-ops until the next successful renderAll. */
+  _lastSuccessAt = null;
+  _navAsOfBase = "";
+  const mainEl = document.querySelector(".main");
+  if (mainEl) mainEl.classList.remove("panel-stale");
 }
 
 function renderTransientError(message) {
@@ -687,6 +728,46 @@ function setLiveDotStale(stale) {
   const meta = document.querySelector(".nav .meta");
   if (!meta) return;
   meta.classList.toggle("stale", !!stale);
+}
+
+/* ── Progressive stale-data degradation ───────────────────────────────── */
+
+function formatAge(ms) {
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return sec + "s ago";
+  const min = Math.floor(sec / 60);
+  if (min < 60) return min + "m ago";
+  const hr = Math.floor(min / 60);
+  return hr + "h ago";
+}
+
+function updateStaleness() {
+  /* Called every STALENESS_TICK_MS (1 s) independent of the poll loop.
+     If we have no successful paint to age against, do nothing — the
+     loading-state UI is already explicit. */
+  if (_lastSuccessAt == null) return;
+
+  const ageMs = Date.now() - _lastSuccessAt;
+  const navEl = $("nav-as-of");
+  if (navEl) {
+    navEl.textContent = _navAsOfBase + " (" + formatAge(ageMs) + ")";
+  }
+
+  const mainEl = document.querySelector(".main");
+  if (mainEl) mainEl.classList.toggle("panel-stale", ageMs >= STALE_DIM_MS);
+
+  if (ageMs >= STALE_COST_MS) {
+    /* Querying #cost .big each tick because renderCost rewrites the
+       cost panel's innerHTML on every successful paint — caching a
+       node reference would point at a detached element after recovery.
+       The DOM lookup is cheap; the guard prevents touching textContent
+       once it already reads "stale" so we don't trigger pointless
+       reflow on every tick after the threshold. */
+    const costBig = document.querySelector("#cost .big");
+    if (costBig && costBig.textContent !== "stale") {
+      costBig.textContent = "stale";
+    }
+  }
 }
 
 /* ── Poll loop ─────────────────────────────────────────────────────────── */
@@ -739,6 +820,7 @@ function start() {
   renderLoadingState("loading…");
   pollOnce();
   setInterval(pollOnce, POLL_INTERVAL_MS);
+  setInterval(updateStaleness, STALENESS_TICK_MS);
 }
 
 if (document.readyState === "loading") {
