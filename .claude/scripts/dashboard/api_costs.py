@@ -46,14 +46,33 @@ Load-failure contract
 ---------------------
 Per-file load failures (missing, unreadable, malformed JSON) do **not**
 raise — `cost_today` / `tokens_today` aggregate across N state files and
-one bad file must not abort the panel. But the failure is no longer
-silent: `_load_state` emits a `log.warning` naming the path + exception
-type AND appends the same message to a module-level error list. The
-aggregation entry points (`cost_today`, `tokens_today`, the `/api/costs`
-route) clear the list at the start of each call; `load_errors()` returns
-the messages accumulated during the most recent call. `api_board.py`
-folds these into `errors[]` on `/api/board` so the operator sees a
-banner instead of silently-zeroed cost/token panels.
+one bad file must not abort the panel. The same partial-reporting +
+operator-visible-signal contract also covers two other silent-fallback
+sites:
+
+  - `_compute_from_tokens` falls back to `0.0` when a run's `model` is
+    not in `_PRICING_TABLE` (e.g., a new Anthropic model that hasn't been
+    added to the snapshot).
+  - The `/api/costs` per-task loop falls back to the full basename when
+    a plan slug doesn't parse as `PLAN-NN-...` (mirroring the basename
+    pattern in `api_board._plan_slug_short`), so a malformed plan
+    filename still surfaces in `per_task` instead of silently
+    disappearing.
+
+In all three cases the failure is no longer silent: a `log.warning` is
+emitted naming the path / model / slug, AND the same message is appended
+to a module-level error list. Module-level "seen" sets dedupe the *log
+calls* across the process lifetime (so repeated polls don't spam the
+log), but `_recent_load_errors` is repopulated on every aggregation pass
+— the operator-visible dashboard banner stays visible while the
+condition persists, even after the first log line has been deduped.
+
+The aggregation entry points (`cost_today`, `tokens_today`, the
+`/api/costs` route) clear the list at the start of each call;
+`load_errors()` returns the messages accumulated during the most recent
+call. `api_board.py` folds these into `errors[]` on `/api/board` so the
+operator sees a banner instead of silently-zeroed cost/token panels or
+silently-vanished plan rows.
 """
 
 from __future__ import annotations
@@ -109,11 +128,15 @@ def _compute_from_tokens(run: dict[str, Any]) -> float:
     Used only when a run object's `cost_usd` is missing or zero AND the
     model is in the pricing table. Returns 0.0 if the model isn't
     recognised (rather than failing) so the caller can still report a
-    partial total instead of erroring the whole panel.
+    partial total instead of erroring the whole panel. Unknown models
+    are logged once per process AND reported on every aggregation pass
+    via `_recent_load_errors` so the operator sees a banner instead of
+    a silently-zeroed contribution.
     """
     model = run.get("model") or ""
     rates = _PRICING_TABLE.get(model)
     if not rates:
+        _record_unknown_model(model)
         return 0.0
     inp   = run.get("input_tokens", 0) or 0
     out   = run.get("output_tokens", 0) or 0
@@ -157,10 +180,55 @@ _state_cache: dict[str, tuple[int, dict[str, Any]]] = {}
 _load_errors_lock = threading.Lock()
 _recent_load_errors: list[str] = []
 
+# Dedupe sets for log noise control. Both are bounded by the cardinality
+# of "models we don't recognise" and "malformed plan slugs we've seen",
+# which is fundamentally tiny — and entries never expire because once an
+# operator has been told about a problem in the logs, repeating it on
+# every poll is just noise. The dashboard banner still updates every
+# pass via `_recent_load_errors`.
+_unknown_models_seen: set[str] = set()
+_malformed_slugs_seen: set[str] = set()
+
 
 def _record_load_error(msg: str) -> None:
     with _load_errors_lock:
         _recent_load_errors.append(msg)
+
+
+def _record_unknown_model(model: str) -> None:
+    """Log once per unique unknown model; always append to load_errors.
+
+    The dedupe is *log-only*: every encounter still appends a message to
+    `_recent_load_errors` so that the dashboard's `errors[]` banner stays
+    visible across polls while the unknown-model condition persists. The
+    set-add + append happen under the same lock so a concurrent poll
+    can't observe a partially-deduped state.
+    """
+    msg = f"unknown model {model!r} — falling back to 0.0 (update _PRICING_TABLE)"
+    with _load_errors_lock:
+        first_time = model not in _unknown_models_seen
+        if first_time:
+            _unknown_models_seen.add(model)
+        _recent_load_errors.append(msg)
+    if first_time:
+        log.warning("api_costs: %s", msg)
+
+
+def _record_malformed_slug(base: str) -> None:
+    """Log once per unique malformed slug; always append to load_errors.
+
+    Same dedupe contract as `_record_unknown_model` — the log is gated
+    by `_malformed_slugs_seen`, but `_recent_load_errors` is repopulated
+    every aggregation pass.
+    """
+    msg = f"malformed plan slug {base!r} — using basename fallback (expected PLAN-NN-...)"
+    with _load_errors_lock:
+        first_time = base not in _malformed_slugs_seen
+        if first_time:
+            _malformed_slugs_seen.add(base)
+        _recent_load_errors.append(msg)
+    if first_time:
+        log.warning("api_costs: %s", msg)
 
 
 def _reset_load_errors() -> None:
@@ -220,6 +288,24 @@ def _state_file_paths() -> list[str]:
         glob.glob(".claude/plans/*.state.json")
         + glob.glob(".claude/plans/archive/*.state.json")
     )
+
+
+def _plan_slug_short(base: str) -> str:
+    """`PLAN-06-mission-centre` → `PLAN-06`; fall back to `base` on malformed input.
+
+    Mirror of `api_board._plan_slug_short` so the two modules agree on
+    what the "short slug" looks like. The caller is expected to have
+    already stripped the path + `.md`/`.state` suffix; we operate purely
+    on the basename here. On a base lacking the expected `PLAN-NN-...`
+    shape, `_record_malformed_slug` logs once + appends to
+    `_recent_load_errors`, and we return `base` so the caller can still
+    surface the plan under its raw name (instead of dropping it).
+    """
+    parts = base.split("-", 2)
+    if len(parts) >= 2 and parts[0] == "PLAN":
+        return "-".join(parts[:2])
+    _record_malformed_slug(base)
+    return base
 
 
 # ── Token accounting helpers ───────────────────────────────────────────────
@@ -456,10 +542,7 @@ def api_costs():
         try:
             state = _load_state(path)
             plan = (state.get("plan_file") or Path(path).stem).split("/")[-1].removesuffix(".md").removesuffix(".state")
-            try:
-                plan_short = plan.split("-")[0] + "-" + plan.split("-")[1]
-            except IndexError:
-                continue
+            plan_short = _plan_slug_short(plan)
             tasks = state.get("tasks") or {}
             # Build into a local dict so a mid-loop schema-drift exception
             # (KeyError / ValueError caught by the outer block below)
