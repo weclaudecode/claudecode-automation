@@ -747,3 +747,47 @@ EOF
   echo "review-pr: fallback: non-JSON reviewer output — applied review-sha marker, orch:review-blocked label, and explanatory comment on PR #${pr_num}"
   return 0
 }
+
+# Enable PR auto-merge on a clean reviewer verdict, unless the task is
+# sensitive (auto_merge_overrides[task] == false). PLAN-12 / closes #42:
+# the reviewer is now the merge gate — launch-worker no longer calls
+# `gh pr merge --auto` so this is the only auto-merge call site.
+#
+# Sensitive tasks remain operator-gated via orch:needs-robbie applied by
+# launch-worker; this function only no-ops on them. The check uses
+# `== false` (not jq's `//` default) because `// true` treats both null
+# AND false as "use the default", silently flipping a deliberate false
+# back to true — see the same trap documented at launch-worker.sh line 79.
+#
+# Caller (review-pr.sh) invokes this only when HAS_SAFETY=0 AND HAS_BLOCKER=0
+# AND the reviewer ran to completion (post-fallback path). That makes
+# REQUEST_CHANGES and fallback_non_json_review automatically merge-safe by
+# construction; the function only assumes a clean verdict at its boundary.
+#
+# Args: <state_file> <task_num> <pr_num> <repo>
+# Returns: 0 on auto-merge enabled OR correctly skipped (sensitive);
+#          1 on `gh pr merge` failure (PR left open for operator).
+maybe_enable_auto_merge() {
+  local state_file="$1"
+  local task_num="$2"
+  local pr_num="$3"
+  local repo="$4"
+
+  local override
+  override=$(jq -r --arg t "$task_num" \
+    'if .auto_merge_overrides[$t] == false then "false" else "true" end' \
+    "$state_file" 2>/dev/null)
+
+  if [ "$override" = "false" ]; then
+    echo "review-pr: task $task_num is sensitive (auto_merge_overrides=false); skipping auto-merge — orch:needs-robbie label already applied by launch-worker"
+    return 0
+  fi
+
+  if gh pr merge "$pr_num" --repo "$repo" --auto --squash --delete-branch >/dev/null 2>&1; then
+    echo "review-pr: enabled auto-merge on PR #$pr_num (clean verdict — reviewer is the merge gate per PLAN-12)"
+    return 0
+  fi
+
+  echo "review-pr: warning — gh pr merge --auto failed on PR #$pr_num — leaving PR open for manual merge" >&2
+  return 1
+}

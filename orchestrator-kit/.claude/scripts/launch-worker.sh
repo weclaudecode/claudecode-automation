@@ -14,7 +14,9 @@
 # Reads top-level state:
 #   .plan_file         path to the plan markdown
 #   .total_tasks       count, for log messages
-#   .auto_merge_overrides[N]  if false, skip `gh pr merge --auto`
+#   .auto_merge_overrides[N]  if false, apply orch:needs-robbie label
+#                              (sensitive flag — review-pr.sh also reads it
+#                              to skip auto-merge on a clean verdict)
 #
 # Writes to state.tasks.N (atomic via temp+mv):
 #   on worker non-zero exit (retries < 3) -> .retries++
@@ -330,16 +332,14 @@ emit_event task_in_review "$(jq -cn \
   --arg plan "$PLAN_NUM" --argjson task "$TASK_NUM" --argjson pr "$PR_NUM" --arg auto_merge "$AUTO_MERGE" \
   '{plan: $plan, task: $task, pr: $pr, auto_merge: ($auto_merge == "true")}' 2>/dev/null || echo '{}')"
 
-if [ "$AUTO_MERGE" = "true" ]; then
-  if gh pr merge "$PR_NUM" --auto --squash --delete-branch 2>&1; then
-    echo "auto-merge enabled on PR #$PR_NUM; sweep-merges will pick up on next tick"
-  else
-    echo "--auto failed on PR #$PR_NUM; treating as needs-review"
-    gh pr edit "$PR_NUM" --add-label "orch:needs-robbie" 2>/dev/null || true
-    bash "$NOTIFY" "auto-merge failed" \
-      "plan $PLAN_NUM task $TASK_NUM: $PR_URL — needs manual merge"
-  fi
-else
+# PLAN-12 / closes #42: workflow inversion. launch-worker no longer enables
+# auto-merge here — review-pr.sh enables it on a clean reviewer verdict, so
+# the reviewer is the real merge gate. AUTO_MERGE is still read above
+# because it gates the sensitive-PR operator-attention label below.
+# Sensitive tasks (auto_merge_overrides[N] == false) get orch:needs-robbie
+# regardless of the merge mechanism — that's the classification label, not
+# a merge primitive.
+if [ "$AUTO_MERGE" = "false" ]; then
   gh pr edit "$PR_NUM" --add-label "orch:needs-robbie" 2>/dev/null || true
   bash "$NOTIFY" "PR needs review" "plan $PLAN_NUM task $TASK_NUM: $PR_URL"
   echo "labeled orch:needs-robbie on PR #$PR_NUM"

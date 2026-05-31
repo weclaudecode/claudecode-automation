@@ -454,6 +454,17 @@ elif [ "$EVENT" = "APPROVE" ]; then
     || true
 fi
 
+# PLAN-12 / closes #42: reviewer is the merge gate. On a clean verdict
+# (no safety_block, no blocker), enable auto-merge for non-sensitive tasks.
+# Sensitive tasks (auto_merge_overrides[N] == false) stay manual-merge —
+# orch:needs-robbie was already applied by launch-worker.sh.
+# Fallback path (fallback_non_json_review) exits 0 before reaching here, so
+# it correctly does NOT call gh pr merge. REQUEST_CHANGES verdicts are
+# filtered by the HAS_SAFETY/HAS_BLOCKER check below.
+if [ "$HAS_SAFETY" -eq 0 ] && [ "$HAS_BLOCKER" -eq 0 ]; then
+  maybe_enable_auto_merge "$STATE_FILE" "$TASK_NUM" "$PR_NUM" "$REPO" || true
+fi
+
 # ---- Update PR body with iteration markers ----
 # Strip prior markers, append new ones. Idempotent on rerun.
 CLEAN_BODY=$(printf '%s\n' "$PR_BODY" \
