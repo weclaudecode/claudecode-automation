@@ -1455,6 +1455,137 @@ else
   fail "scenario 20 (malformed slug)"
 fi
 
+# ─── Scenario 21: unrecognised branch in _workers_panel → rendered + breadcrumb
+# Regression for PLAN-09 T3: _workers_panel used to `continue` (silent drop)
+# when a worktree's branch didn't match the kit's `plan-NN-task-M` regex.
+# A live `claude -p` worker on a bespoke branch (operator hot-fix, manual
+# experiment) thus vanished from the Active Workers panel, encouraging the
+# operator to spawn more parallel work in the mistaken belief that capacity
+# was free. The fix renders the worktree with an `unrecognised` sentinel
+# marker AND emits a one-shot WARNING per unique branch (module-level dedup
+# set bounds log noise across the 5 s dashboard poll loop).
+echo "--- 21: unrecognised branch → card rendered + WARNING breadcrumb ---"
+if KIT_SCRIPTS_DIR="$KIT_SCRIPTS_DIR" run_py <<'PY'; then
+import io, logging, os, sys
+sys.path.insert(0, os.environ["KIT_SCRIPTS_DIR"])
+from dashboard import api_board
+
+# Reset the dedup set so this scenario's branch is "new".
+api_board._unrecognised_branches_seen.clear()
+
+# Capture WARNING-level output on the board logger.
+buf = io.StringIO()
+handler = logging.StreamHandler(buf)
+handler.setLevel(logging.WARNING)
+handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+board_log = logging.getLogger("dashboard.board")
+prior_level = board_log.level
+board_log.addHandler(handler)
+board_log.setLevel(logging.WARNING)
+
+# Branch without the `plan-NN` pattern — simulates an operator-triggered
+# hot-fix worker on `wt-experimental-2`.
+worktrees = [{
+    "path": "wt-experimental-2",
+    "branch": "wt-experimental-2",
+    "task_n": 5,
+    "last_log": None,
+}]
+
+try:
+    cards = api_board._workers_panel(worktrees, [], ["Pip", "Bento", "Nova"])
+    # Second call with the SAME branch must NOT re-emit a warning — the
+    # module-level dedup set is the load-bearing bound on log noise.
+    buf_second = io.StringIO()
+    handler_second = logging.StreamHandler(buf_second)
+    handler_second.setLevel(logging.WARNING)
+    handler_second.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    board_log.addHandler(handler_second)
+    try:
+        cards_again = api_board._workers_panel(worktrees, [], ["Pip", "Bento", "Nova"])
+    finally:
+        board_log.removeHandler(handler_second)
+finally:
+    board_log.removeHandler(handler)
+    board_log.setLevel(prior_level)
+
+# ── Card must be rendered (not silently dropped) ───────────────────────
+assert len(cards) == 1, (
+    f"unrecognised-branch worktree must still render in the panel "
+    f"(silent drop was the bug being fixed); got {cards!r}"
+)
+card = cards[0]
+assert card.get("name") == "unrecognised", (
+    f"card must carry the 'unrecognised' sentinel so the frontend renders "
+    f"the recognise-me badge instead of a plausible-looking worker; got {card!r}"
+)
+assert card.get("task") == 5, f"task_n must still be surfaced: {card!r}"
+assert card.get("worktree") == "wt-experimental-2", (
+    f"worktree path must still be surfaced so the operator can locate the "
+    f"directory: {card!r}"
+)
+# plan field must NOT be a fabricated PLAN-XX — there is no plan to attribute
+# the worker to. None signals "no plan match" to the frontend.
+assert card.get("plan") in (None, ""), (
+    f"plan must be None/empty (not a fabricated PLAN-XX) when the branch "
+    f"didn't match the regex: {card!r}"
+)
+
+# ── WARNING breadcrumb must be emitted on the first occurrence ─────────
+log_output = buf.getvalue()
+assert "WARNING" in log_output, (
+    f"first unrecognised-branch occurrence must emit a WARNING-level log "
+    f"so operators see the silent-drop replacement; got:\n{log_output!r}"
+)
+assert "dashboard.board" in log_output, (
+    f"breadcrumb should be tagged with the dashboard.board logger: {log_output!r}"
+)
+assert "wt-experimental-2" in log_output, (
+    f"breadcrumb must name the offending branch so the operator can grep "
+    f"for it: {log_output!r}"
+)
+
+# ── Dedup: second call with the same branch must NOT re-emit ───────────
+second_output = buf_second.getvalue()
+assert second_output == "", (
+    f"dedup set must suppress the second warning for the same branch — "
+    f"otherwise a 5 s polling dashboard would spam the log; got: {second_output!r}"
+)
+# But the second call's card must still render (rendering is per-call,
+# logging is once-per-process).
+assert len(cards_again) == 1, (
+    f"dedup must NOT suppress rendering — only logging: {cards_again!r}"
+)
+assert cards_again[0].get("name") == "unrecognised", (
+    f"second-call card must still carry the sentinel: {cards_again[0]!r}"
+)
+
+# ── A different unrecognised branch in the same process DOES re-warn ──
+buf_other = io.StringIO()
+handler_other = logging.StreamHandler(buf_other)
+handler_other.setLevel(logging.WARNING)
+handler_other.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+board_log.addHandler(handler_other)
+board_log.setLevel(logging.WARNING)
+try:
+    api_board._workers_panel(
+        [{"path": "wt-other-branch", "branch": "wt-other-branch", "task_n": 3, "last_log": None}],
+        [], ["Pip"],
+    )
+finally:
+    board_log.removeHandler(handler_other)
+    board_log.setLevel(prior_level)
+assert "wt-other-branch" in buf_other.getvalue(), (
+    f"dedup must be PER-branch (not global) — a new unrecognised branch "
+    f"must still emit its first-occurrence warning: {buf_other.getvalue()!r}"
+)
+sys.exit(0)
+PY
+  pass "scenario 21 (unrecognised branch → card rendered + first-occurrence WARNING)"
+else
+  fail "scenario 21 (unrecognised branch)"
+fi
+
 # ─── Summary ───────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((TESTS_PASSED + TESTS_FAILED))

@@ -68,6 +68,13 @@ _DEFAULT_EVENTS_PATH = Path(".claude/state/events.jsonl")
 _BRANCH_PLAN_RE = re.compile(r"plan-(\d+)")
 _LOG_TIME_RE = re.compile(r"\b(\d{2}:\d{2}:\d{2})\b")
 
+# Module-level dedup set: every distinct unrecognised branch string the
+# workers panel has logged about during this process's lifetime. The
+# dashboard polls /api/board every 5 s, so without this guard a single
+# operator-triggered hot-fix worker on a bespoke branch would spam the
+# log ~720 times an hour. Same pattern as api_costs._unknown_models_seen.
+_unrecognised_branches_seen: set[str] = set()
+
 
 # ── Agent identity ─────────────────────────────────────────────────────────
 
@@ -541,6 +548,33 @@ def _workers_panel(
         branch = w.get("branch") or ""
         m = _BRANCH_PLAN_RE.search(branch)
         if not m:
+            # Render the worktree with an unrecognised-branch sentinel
+            # instead of silently dropping it. A live `claude -p` worker
+            # on a bespoke branch (operator hot-fix, manual experiment)
+            # vanishing from this panel would tempt the operator to spawn
+            # more parallel work in the false belief that capacity is free.
+            # First-occurrence warning is dedup'd by branch string — bounded
+            # log noise across the 5 s polling loop.
+            if branch not in _unrecognised_branches_seen:
+                _unrecognised_branches_seen.add(branch)
+                log.warning(
+                    "api_board: worktree branch %r does not match the "
+                    "plan-NN-task-M pattern; rendering with 'unrecognised' "
+                    "marker so the operator sees the worker is alive but "
+                    "on a bespoke branch",
+                    branch,
+                )
+            out.append({
+                "name": "unrecognised",
+                "avatar_seed": "unrecognised",
+                "task": task_n,
+                "plan": None,
+                "title": "",
+                "worktree": w.get("path"),
+                "last_log": w.get("last_log"),
+                "role": "worker",
+                "branch": branch,
+            })
             continue
         plan_short = f"PLAN-{m.group(1)}"
         title = ""
