@@ -175,6 +175,101 @@ else
 fi
 rm -rf "$B3_DIR"
 
+# ─── C. Touches-collision warning: 2+ tasks share a path → advisory message ──
+# Pins the contract added with PLAN-10 Task 2: ingest emits a stderr warning
+# for every path listed by ≥2 tasks (the runtime collision detector would
+# serialize them anyway), and exits 0 because the warning is advisory.
+make_multitask_plan() {
+  # Args: <dir> <basename> <task2_touches>
+  # Always emits Task 1 with touches=[`src/x.py`]; Task 2's touches are arg 3.
+  local dir="$1" base="$2" t2_touches="$3"
+  local file="$dir/${base}.md"
+  cat > "$file" <<EOF
+# ${base} — fixture
+
+## Task 1: First task
+**depends_on:** []
+**touches:** [\`src/x.py\`]
+
+Body 1.
+
+## Task 2: Second task
+**depends_on:** []
+**touches:** ${t2_touches}
+
+Body 2.
+EOF
+  echo "$file"
+}
+
+# ─── C1. Two tasks sharing one path → exactly one warning naming both tasks ──
+echo "--- C1: 2 tasks share 1 path → single warning with both task numbers ---"
+C1_DIR=$(make_tmpdir)
+C1_PLAN=$(make_multitask_plan "$C1_DIR" "PLAN-97-collide-2" '[`src/x.py`]')
+if "$INGEST" "$C1_PLAN" >/dev/null 2>"$C1_DIR/stderr"; then
+  COUNT=$(grep -c 'tasks share touches path src/x.py' "$C1_DIR/stderr" || true)
+  if [ "$COUNT" = "1" ] && grep -q 'tasks: 1, 2' "$C1_DIR/stderr"; then
+    pass "single warning emitted naming tasks 1 and 2"
+  else
+    fail "expected one warning naming both tasks; got count=$COUNT stderr=$(cat "$C1_DIR/stderr")"
+  fi
+else
+  fail "ingest exited non-zero (warning should not block): $(cat "$C1_DIR/stderr")"
+fi
+rm -rf "$C1_DIR"
+
+# ─── C2. No shared paths → no collision warning emitted ─────────────────────
+echo "--- C2: disjoint touches → no collision warning ---"
+C2_DIR=$(make_tmpdir)
+C2_PLAN=$(make_multitask_plan "$C2_DIR" "PLAN-98-disjoint" '[`src/y.py`]')
+if "$INGEST" "$C2_PLAN" >/dev/null 2>"$C2_DIR/stderr"; then
+  if grep -q 'tasks share touches path' "$C2_DIR/stderr"; then
+    fail "unexpected collision warning on disjoint touches: $(cat "$C2_DIR/stderr")"
+  else
+    pass "no collision warning on disjoint touches"
+  fi
+else
+  fail "ingest exited non-zero: $(cat "$C2_DIR/stderr")"
+fi
+rm -rf "$C2_DIR"
+
+# ─── C3. Four tasks sharing one path → single warning listing all four ──────
+# Guards against a regression where ≥3 colliding tasks would print N-1
+# warnings (one per pair) instead of one consolidated message.
+echo "--- C3: 4 tasks share 1 path → single warning listing all four ---"
+C3_DIR=$(make_tmpdir)
+C3_PLAN="$C3_DIR/PLAN-99-collide-4.md"
+cat > "$C3_PLAN" <<'EOF'
+# PLAN-99-collide-4 — fixture
+
+## Task 1: a
+**depends_on:** []
+**touches:** [`shared.py`]
+
+## Task 2: b
+**depends_on:** []
+**touches:** [`shared.py`]
+
+## Task 3: c
+**depends_on:** []
+**touches:** [`shared.py`]
+
+## Task 4: d
+**depends_on:** []
+**touches:** [`shared.py`]
+EOF
+if "$INGEST" "$C3_PLAN" >/dev/null 2>"$C3_DIR/stderr"; then
+  COUNT=$(grep -c 'tasks share touches path shared.py' "$C3_DIR/stderr" || true)
+  if [ "$COUNT" = "1" ] && grep -q 'tasks: 1, 2, 3, 4' "$C3_DIR/stderr" && grep -q '^ingest-plan: warning: 4 tasks share' "$C3_DIR/stderr"; then
+    pass "single consolidated warning for 4-way collision"
+  else
+    fail "expected one warning listing 1,2,3,4; got count=$COUNT stderr=$(cat "$C3_DIR/stderr")"
+  fi
+else
+  fail "ingest exited non-zero on 4-way collision: $(cat "$C3_DIR/stderr")"
+fi
+rm -rf "$C3_DIR"
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 if [ "$TESTS_FAILED" -gt 0 ]; then
   echo "RESULT: $TESTS_FAILED failure(s)" >&2

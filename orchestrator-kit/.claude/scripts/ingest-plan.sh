@@ -377,10 +377,33 @@ done <<< "$TASKS_JSON"
 
 [ "$VALIDATION_FAILED" -eq 1 ] && exit 1
 
-# Cycle detection via DFS in python (gawk + bash struggle with graph algos)
+# Cycle detection + touches-collision warning via DFS in python (gawk + bash
+# struggle with graph algos, and we already have the tasks list parsed here so
+# folding the collision check in avoids spawning a second interpreter).
 if ! printf '%s\n' "$TASKS_JSON" | python3 -c '
 import json, sys
 tasks = [json.loads(line) for line in sys.stdin if line.strip()]
+
+# Touches-collision warning (advisory, never blocks ingest). Any path listed
+# in 2+ tasks will serialize at runtime via find-ready-tasks.sh glob-collision
+# detection — see orchestrator-kit/.claude/scripts/find-ready-tasks.sh. Some
+# authors deliberately serialize via shared touches; warning lets them confirm
+# that was the intent.
+path_to_tasks = {}
+for t in tasks:
+    for p in t["touches"]:
+        path_to_tasks.setdefault(p, []).append(t["task"])
+for p, ns in sorted(path_to_tasks.items()):
+    if len(ns) >= 2:
+        task_list = ", ".join(str(n) for n in ns)
+        print(
+            f"ingest-plan: warning: {len(ns)} tasks share touches path {p} — "
+            f"they will serialize at runtime via the collision detector — "
+            f"consider splitting if true-parallel execution is desired "
+            f"(tasks: {task_list})",
+            file=sys.stderr,
+        )
+
 graph = {t["task"]: list(t["depends_on"]) for t in tasks}
 WHITE, GRAY, BLACK = 0, 1, 2
 color = {n: WHITE for n in graph}
