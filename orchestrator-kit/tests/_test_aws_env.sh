@@ -67,13 +67,20 @@ EOF
 # ---------------------------------------------------------------------------
 # Extract the env-var export block from launch-worker.sh and evaluate it
 # against a given state file. Returns the exported vars as KEY=VALUE lines.
+#
+# `env -i HOME="$HOME" PATH="$PATH" bash` scrubs the operator's environment
+# from the sub-shell. Without it, an operator with AWS_PROFILE / AWS_REGION
+# / etc. already exported in their shell would see those values leak into
+# the probe — Scenario 2 (aws_env absent) would then fail because it
+# expects every AWS_* / CDK_DEFAULT_* var to be empty. HOME + PATH are the
+# only vars jq/sed/grep/cut need to resolve.
 # ---------------------------------------------------------------------------
 probe_aws_exports() {
   local state_file="$1"
 
   # Pull only the aws_env block from launch-worker.sh (between the two marker
-  # comments) and run it in a subshell, then dump the five AWS vars.
-  bash -c "
+  # comments) and run it in a clean subshell, then dump the five AWS vars.
+  env -i HOME="$HOME" PATH="$PATH" bash -c "
     STATE_FILE='$state_file'
     $(sed -n '/^# Propagate AWS env vars/,/^unset _AWS_ENV/p' "$SCRIPTS_DIR/launch-worker.sh")
     echo \"AWS_PROFILE=\${AWS_PROFILE:-}\"

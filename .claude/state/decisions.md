@@ -68,3 +68,10 @@ Format:
 **Recommended option:** yes
 **Reason:** Plan spec says "Either factor the fallback logic into a tiny shell function called from review-pr.sh and unit-test it, OR test the script end-to-end with mocked gh — whichever is closer to the existing kit test style." Existing tests (`_test_emit_event.sh`) source `_dispatcher_lib.sh` and test functions directly; the same pattern lets `_test_review_fallback.sh` exercise the fallback in isolation with a `gh` stub on PATH, instead of end-to-end-mocking the whole review-pr.sh pipeline (claude -p, jq, state.json…). Function is sourced into review-pr.sh's scope via the existing `source _dispatcher_lib.sh` at line 69.
 **Reversible:** yes
+
+## 2026-05-31 14:00 — Plan 11 Task 2
+**Decision:** Applied the `env -i HOME="$HOME" PATH="$PATH" bash` env-scrub inside the shared `probe_aws_exports` helper so it covers BOTH Scenario 1 and Scenario 2, rather than only Scenario 2 as the acceptance text reads literally.
+**Severity:** routine
+**Recommended option:** n/a
+**Reason:** `probe_aws_exports` is shared between scenarios; the underlying bug (operator-env leak into the bash -c subshell) is symmetric. A leaked `AWS_REGION=ap-southeast-2` (a common operator profile region) would also silently false-positive Scenario 1, because the leaked value happens to match the expected value the test asserts. Fixing the helper once seals both holes and keeps the helper as the single source of truth for "minimal-env subshell." Acceptance #1 still holds — Scenario 2's invocation IS wrapped with env -i — and #4 explicitly requires the rest of the file (including Scenario 1) to continue behaving correctly, which it does.
+**Reversible:** yes
