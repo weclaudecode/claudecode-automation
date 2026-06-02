@@ -142,7 +142,7 @@ Two env vars override defaults (set in your cron line or shell profile):
 |-----------------------|----------|----------------------------------------------------------|
 | `ORCH_WORKER_MODEL`   | `opus`   | Implementation default. Set to `sonnet` to cut per-task cost ~5× on plans you trust to be simple. |
 | `ORCH_REVIEWER_MODEL` | `opus`   | Top-level reviewer coordinator. The 6 `pr-review-toolkit` specialists each pick their own model; only the coordinator's tokens change. Drop to `sonnet` for a synthesis-cost cut. |
-| `ORCH_MAX_TURNS`      | `30`     | Per-session `claude -p --max-turns` cap for a worker run (per-task `max_turns:` in the plan overrides it). NOT the review-loop iteration cap — that is `ORCH_REVIEW_MAX_ITERS`. |
+| `ORCH_MAX_TURNS`      | `60`     | Per-session `claude -p --max-turns` cap for a worker run (per-task `max_turns:` in the plan overrides it). NOT the review-loop iteration cap — that is `ORCH_REVIEW_MAX_ITERS`. Bumped from 30 in PLAN-10 after empirical rescue evidence. |
 | `ORCH_REVIEW_MAX_ITERS` | `5`    | Max review→iterate rounds before a task blocks with `review_iter_cap` |
 | `ORCH_LOG_MAX_BYTES`  | `10485760` | `orchestrator.log` rotation threshold (default 10 MiB)             |
 | `ORCH_EVENTS_MAX_BYTES` | `10485760` | `events.jsonl` rotation threshold (default 10 MiB)               |
@@ -337,8 +337,12 @@ match the log lines and the code in `orchestrator.sh`.
   `.claude/state/review-pr<N>-sha<oid>.diff`, then has the coordinator
   fan out to the six `pr-review-toolkit` specialists and
   `/security-review` in parallel before synthesizing the JSON verdict.
-  Defaults: `ORCH_REVIEWER_MODEL=opus` for the coordinator; specialists
-  pick their own model.
+  On a clean verdict (no `safety_block` findings) the reviewer also calls
+  `maybe_enable_auto_merge` to enable `gh pr merge --auto` — this is the
+  only auto-merge call site since PLAN-12 (closes #42). Sensitive tasks
+  in `auto_merge_overrides` are skipped and stay on `orch:needs-robbie`
+  for manual merge. Defaults: `ORCH_REVIEWER_MODEL=opus` for the
+  coordinator; specialists pick their own model.
 - **Phase 4 — `iterate-pass.sh`** *(optional)*. For each `in_review` PR
   with `orch:review-blocked` whose marker SHA matches HEAD, spawn
   `iterate-pr.sh` to address findings. Hitting the iter cap blocks the
@@ -348,11 +352,13 @@ match the log lines and the code in `orchestrator.sh`.
   tasks; each spawned `launch-worker.sh` creates a worktree on
   `claude/plan-NN-task-M`, runs `claude -p` with the worker prompt +
   task spec, pushes, opens a PR, and transitions the task to
-  `in_review` (auto-merge-eligible PRs get `gh pr merge --auto`).
+  `in_review`. Auto-merge is **not** enabled at launch (PLAN-12
+  inversion); the reviewer enables it on a clean verdict in Phase 3.
 - **Plan-completion check.** If every task is terminal (`merged` or
   `blocked`), archive the plan + state file and notify.
 - **Phase 6 — `plan-status.sh`.** Best-effort refresh of the on-disk
-  dashboard summary.
+  dashboard summary. The `[plan-NN] status` issue it maintains is
+  auto-closed when the plan archives (PLAN-12; closes #93).
 - **Phase 7 — `monitor-sweep.sh`** *(optional; gated by
   `ORCH_MONITOR_ENABLED=1`)*. Heuristic health check; files
   `monitor:finding` issues for patterns operators would otherwise miss.
