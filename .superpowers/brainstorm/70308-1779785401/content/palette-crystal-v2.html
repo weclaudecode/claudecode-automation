@@ -1,0 +1,206 @@
+<h2>Crystal palette — semantic mapping</h2>
+<p class="subtitle">Purple stays primary (brand + active). Adding emerald for done/accepted, coral for blocked/alerts. Amber kept for draft/warning. Confirm the semantic mappings or adjust.</p>
+
+<style>
+  /* === CRYSTAL TOKEN PALETTE === */
+  :root {
+    --bg-0: #0c0f1a;
+    --bg-1: #161b35;
+    --bg-2: #1f2a4e;
+    --brand: #7c4dff;
+    --brand-soft: rgba(124,77,255,.18);
+    --brand-glow: rgba(124,77,255,.55);
+    --success: #34d399;
+    --success-soft: rgba(52,211,153,.18);
+    --success-glow: rgba(52,211,153,.5);
+    --alert: #ff5577;
+    --alert-soft: rgba(255,85,119,.18);
+    --alert-glow: rgba(255,85,119,.55);
+    --warn: #ffa500;
+    --warn-soft: rgba(255,165,0,.18);
+    --warn-glow: rgba(255,165,0,.5);
+    --text: rgba(255,255,255,.92);
+    --text-dim: rgba(255,255,255,.62);
+    --border: rgba(255,255,255,.10);
+  }
+
+  .crystal-shell {
+    background:
+      radial-gradient(circle at 50% 0%, rgba(124,77,255,.3), transparent 55%),
+      radial-gradient(circle at 100% 100%, rgba(255,165,0,.14), transparent 50%),
+      linear-gradient(135deg, var(--bg-0), var(--bg-1) 60%, var(--bg-2));
+    border-radius: 14px;
+    padding: 18px;
+    border: 1px solid rgba(124,77,255,.22);
+  }
+
+  /* token swatches */
+  .tokens { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 12px 0; }
+  .tok { background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); border-radius: 8px; padding: 8px; backdrop-filter: blur(10px); }
+  .tok .chip { width: 100%; height: 24px; border-radius: 5px; margin-bottom: 6px; box-shadow: 0 4px 14px var(--g, transparent); }
+  .tok .name { font-size: 11px; color: var(--text); font-weight: 600; }
+  .tok .use { font-size: 9.5px; color: var(--text-dim); margin-top: 2px; line-height: 1.4; }
+
+  /* glass mock */
+  .glass {
+    background: rgba(255,255,255,.05);
+    backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 10px 30px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.08);
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+    font-size: 10px;
+    line-height: 1.5;
+    color: var(--text);
+  }
+  .glass .topbar { padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 9px; color: var(--text-dim); display: flex; gap: 6px; align-items: center; }
+  .glass .body { padding: 10px 12px; }
+  .glass .h1 { font-size: 13px; font-weight: 700; color: white; margin-bottom: 8px; }
+  .glass .h2 { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); margin: 10px 0 5px; }
+
+  /* status strip */
+  .strip { display: flex; gap: 6px; align-items: center; padding: 8px 10px; border-radius: 8px; background: rgba(0,0,0,.3); border: 1px solid var(--border); margin-bottom: 10px; }
+  .badge { padding: 2px 8px; border-radius: 4px; font-size: 9.5px; font-weight: 700; letter-spacing: .04em; }
+  .badge.phase { background: linear-gradient(135deg, var(--brand), #b388ff); color: white; box-shadow: 0 0 14px var(--brand-glow); }
+  .badge.active { background: var(--brand-soft); color: #c8b3ff; border: 1px solid var(--brand); }
+  .badge.done { background: var(--success-soft); color: #6ee7b7; border: 1px solid var(--success); }
+  .badge.blocked { background: var(--alert-soft); color: #ff8da6; border: 1px solid var(--alert); box-shadow: 0 0 12px var(--alert-glow); }
+  .badge.draft { background: var(--warn-soft); color: #ffd58a; border: 1px solid var(--warn); }
+  .progress { flex: 1; height: 5px; background: rgba(255,255,255,.08); border-radius: 3px; overflow: hidden; }
+  .progress .fill { height: 100%; }
+  .progress .fill.active { background: linear-gradient(90deg, var(--brand), var(--success)); box-shadow: 0 0 10px var(--brand-glow); }
+  .progress .fill.done { background: var(--success); box-shadow: 0 0 10px var(--success-glow); }
+  .small { font-size: 9.5px; color: var(--text-dim); }
+
+  /* task rows */
+  .task { background: rgba(255,255,255,.035); border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; margin-bottom: 4px; display: flex; gap: 8px; align-items: center; }
+  .task.done { background: rgba(52,211,153,.06); border-color: rgba(52,211,153,.25); }
+  .task.blocked { background: rgba(255,85,119,.06); border-color: rgba(255,85,119,.3); }
+  .task .ck { width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--text-dim); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .task.done .ck { background: var(--success); border-color: var(--success); box-shadow: 0 0 8px var(--success-glow); position: relative; }
+  .task.done .ck::after { content: ""; position: absolute; width: 6px; height: 3px; border-left: 1.5px solid #062; border-bottom: 1.5px solid #062; transform: rotate(-45deg); top: 3px; left: 2px; }
+  .task.blocked .ck { background: var(--alert); border-color: var(--alert); box-shadow: 0 0 8px var(--alert-glow); }
+  .task .name { flex: 1; color: var(--text); }
+  .task.done .name { color: #6ee7b7; }
+  .task.blocked .name { color: #ff8da6; }
+  .task .bar { width: 55px; height: 3px; background: rgba(255,255,255,.07); border-radius: 2px; overflow: hidden; }
+  .task .bar .f { height: 100%; }
+  .task.done .bar .f { background: var(--success); width: 100%; }
+  .task.blocked .bar .f { background: var(--alert); width: 30%; }
+  .task .progress-text { font-size: 9px; color: var(--text-dim); }
+
+  /* ADR row */
+  .adr-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--border); }
+  .adr-row:last-child { border: 0; }
+  .adr-row .num { font-weight: 700; color: #c8b3ff; font-size: 10.5px; }
+  .adr-row .title { flex: 1; color: var(--text); }
+
+  /* finding row */
+  .find { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px dashed var(--border); font-size: 10px; }
+  .sev { padding: 1px 6px; border-radius: 3px; font-size: 8.5px; font-weight: 700; letter-spacing: .04em; }
+  .sev.high { background: var(--alert); color: white; box-shadow: 0 0 10px var(--alert-glow); }
+  .sev.med  { background: var(--warn); color: #2a1a00; }
+  .sev.low  { background: var(--brand-soft); color: #c8b3ff; }
+  .sev.fixed { background: var(--success); color: #062; }
+
+  /* section grid */
+  .section-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; margin-top: 14px; }
+</style>
+
+<div class="crystal-shell">
+
+<div class="label-mini" style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;opacity:.7;margin-bottom:6px">Token palette</div>
+
+<div class="tokens">
+  <div class="tok">
+    <div class="chip" style="background:linear-gradient(135deg,#7c4dff,#b388ff);--g:rgba(124,77,255,.55)"></div>
+    <div class="name">Brand purple</div>
+    <div class="use">primary, phase badge, active task, focus ring</div>
+  </div>
+  <div class="tok">
+    <div class="chip" style="background:#34d399;--g:rgba(52,211,153,.5)"></div>
+    <div class="name">Emerald</div>
+    <div class="use">done / accepted / resolved / passing</div>
+  </div>
+  <div class="tok">
+    <div class="chip" style="background:#ff5577;--g:rgba(255,85,119,.55)"></div>
+    <div class="name">Coral red</div>
+    <div class="use">blocked / alert / high-severity / failing</div>
+  </div>
+  <div class="tok">
+    <div class="chip" style="background:#ffa500;--g:rgba(255,165,0,.5)"></div>
+    <div class="name">Amber</div>
+    <div class="use">draft / warning / proposed / medium severity</div>
+  </div>
+  <div class="tok">
+    <div class="chip" style="background:linear-gradient(135deg,#0c0f1a,#1f2a4e)"></div>
+    <div class="name">Indigo base</div>
+    <div class="use">backdrop, glass surface, body text well</div>
+  </div>
+</div>
+
+<div class="section-grid">
+
+  <!-- Plan mock showing all states -->
+  <div class="glass">
+    <div class="topbar"><span>aiden_agent</span><span style="opacity:.4">/</span><span>plans</span><span style="opacity:.4">/</span><span>Phase 9a Gateway Interceptor</span></div>
+    <div class="body">
+      <div class="h1">Phase 9a — Gateway Interceptor</div>
+      <div class="strip">
+        <span class="badge phase">PHASE 9a</span>
+        <span class="badge active">ACTIVE</span>
+        <div class="progress"><div class="fill active" style="width:42%"></div></div>
+        <span class="small">14 / 33 steps</span>
+      </div>
+
+      <div class="task done"><div class="ck"></div><div class="name">Task 1 — Interceptor handler + tests</div><div class="bar"><div class="f"></div></div><span class="progress-text">10/10</span></div>
+      <div class="task done"><div class="ck"></div><div class="name">Task 2 — ToolsStack construct</div><div class="bar"><div class="f"></div></div><span class="progress-text">4/4</span></div>
+      <div class="task blocked"><div class="ck"></div><div class="name">Task 3 — API Key Provider <span style="font-size:9px;opacity:.85">(waiting on ADR-010 approval)</span></div><div class="bar"><div class="f"></div></div><span class="progress-text">0/3</span></div>
+      <div class="task"><div class="ck"></div><div class="name">Task 4 — Inbound auth flip</div><div class="bar"><div class="f"></div></div><span class="progress-text">0/5</span></div>
+      <div class="task"><div class="ck"></div><div class="name">Task 5 — Target wiring</div><div class="bar"><div class="f"></div></div><span class="progress-text">0/3</span></div>
+
+      <div class="h2">ADR index (this project)</div>
+      <div class="adr-row"><span class="num">ADR-008</span><span class="title">Clerk JWT via JWKS</span><span class="badge done">ACCEPTED</span></div>
+      <div class="adr-row"><span class="num">ADR-002</span><span class="title">Inline intercept state machine</span><span class="badge" style="background:rgba(255,255,255,.08);color:var(--text-dim);text-decoration:line-through;border:1px solid var(--border)">SUPERSEDED</span></div>
+      <div class="adr-row"><span class="num">ADR-010</span><span class="title">Gateway interceptor JWT passthrough</span><span class="badge draft">PROPOSED</span></div>
+    </div>
+  </div>
+
+  <!-- Review / findings -->
+  <div class="glass">
+    <div class="topbar"><span>data-entry-website</span><span style="opacity:.4">/</span><span>audits</span><span style="opacity:.4">/</span><span>2026-05-20</span></div>
+    <div class="body">
+      <div class="h1">Codebase Audit — 2026-05-20</div>
+      <div class="strip" style="margin-bottom:8px">
+        <span class="badge done">5 FIXED</span>
+        <span class="badge blocked">2 OPEN</span>
+        <span class="badge draft">3 INVESTIGATING</span>
+      </div>
+
+      <div class="h2">Severity</div>
+      <div class="find"><span class="sev high">HIGH</span><span style="flex:1">auth.md — Missing RLS on user_profiles</span><span class="small">open</span></div>
+      <div class="find"><span class="sev high">HIGH</span><span style="flex:1">financial.md — Plaintext API key in env</span><span class="badge done" style="font-size:9px">FIXED</span></div>
+      <div class="find"><span class="sev med">MED</span><span style="flex:1">db-schema.md — Index missing on hot path</span><span class="small">open</span></div>
+      <div class="find"><span class="sev med">MED</span><span style="flex:1">edge-functions.md — No retry on 5xx</span><span class="badge done" style="font-size:9px">FIXED</span></div>
+      <div class="find"><span class="sev low">LOW</span><span style="flex:1">dead-code.md — Unused exports (n=8)</span><span class="small">open</span></div>
+      <div class="find"><span class="sev fixed">DONE</span><span style="flex:1">auth.md — Session token rotation cadence</span><span class="badge done" style="font-size:9px">FIXED</span></div>
+    </div>
+  </div>
+
+</div>
+
+<div style="margin-top:14px;padding:10px 12px;background:rgba(255,255,255,.04);border-radius:8px;border:1px solid var(--border);font-size:12px;color:var(--text)">
+  <strong style="color:#c8b3ff">Semantic mapping summary</strong><br>
+  <span class="small">• Purple — phase/active/brand • Emerald — done/accepted/fixed • Coral — blocked/high-severity • Amber — proposed/draft/medium • Strikethrough+muted — superseded</span>
+</div>
+
+</div>
+
+<div class="section" style="margin-top: 16px; font-size: 13px; opacity: .85;">
+  Click anywhere to confirm. In terminal: say <strong>"locked in"</strong> if the mapping works, or tell me what to tweak (e.g. "make superseded use coral", "I want a separate color for in-review", "lighten the red, it's too hot").
+</div>
+
+<div class="options" style="display:none">
+  <div class="option" data-choice="locked-in" onclick="toggleSelect(this)"></div>
+</div>

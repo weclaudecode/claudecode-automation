@@ -1,0 +1,139 @@
+{
+  "schema_version": 3,
+  "plan_file": ".claude/plans/PLAN-07-dashboard-bugfixes.md",
+  "total_tasks": 4,
+  "status": "in_progress",
+  "tasks": {
+    "1": {
+      "title": "Fix `gh pr list` truncation misclassifying in_review tasks as Blocked",
+      "depends_on": [],
+      "touches": [
+        "orchestrator-kit/.claude/scripts/dashboard/api_github.py",
+        "orchestrator-kit/.claude/scripts/dashboard/api_board.py",
+        ".claude/scripts/dashboard/api_github.py",
+        ".claude/scripts/dashboard/api_board.py",
+        "orchestrator-kit/tests/_test_board_api.sh"
+      ],
+      "issue": 57,
+      "pr": null,
+      "status": "pending",
+      "retries": 1,
+      "deploy_mode": "operator",
+      "acceptance": [
+        "api_github.py raises the gh pr list --limit from 30 to 100",
+        "build_board in api_board.py handles pr_obj is None for a task with status in_review by routing on task.status alone (not the PR-state override) so an absent PR does not fall to the Blocked defensive branch",
+        "_column_for_task contract unchanged: callers still pass the actual pr_open/pr_merged values when a PR object is present",
+        "a unit test in _test_board_api.sh covers the in_review with pr_obj None scenario and asserts the column is in_review or ready_for_review (not blocked)",
+        "the existing PLAN-06 T7 tests in _test_board_api.sh still pass unchanged",
+        "shellcheck clean on _test_board_api.sh",
+        "kit-drift CI passes (root install in sync via kit-upgrade.sh --apply)"
+      ],
+      "usage": {
+        "runs": [
+          {
+            "kind": "worker",
+            "cost_usd": 3.09457875,
+            "input_tokens": 44,
+            "output_tokens": 13036,
+            "cache_read_input_tokens": 2787030,
+            "cache_creation_input_tokens": 219991,
+            "num_turns": 31,
+            "duration_ms": 246137,
+            "model": "claude-opus-4-7",
+            "is_error": true,
+            "run_at": "2026-05-30T05:10:19Z"
+          }
+        ],
+        "total_cost_usd": 3.09457875,
+        "total_input_tokens": 44,
+        "total_output_tokens": 13036,
+        "total_cache_read_tokens": 2787030,
+        "total_cache_creation_tokens": 219991,
+        "total_turns": 31,
+        "total_duration_ms": 246137,
+        "models": [
+          "claude-opus-4-7"
+        ]
+      }
+    },
+    "2": {
+      "title": "Fix `_fetch_pr_labels` empty-cache bypassing sensitive-flag safety",
+      "depends_on": [],
+      "touches": [
+        "orchestrator-kit/.claude/scripts/dashboard/api_board.py",
+        ".claude/scripts/dashboard/api_board.py",
+        "orchestrator-kit/tests/_test_board_api.sh"
+      ],
+      "issue": 58,
+      "pr": null,
+      "status": "pending",
+      "retries": 0,
+      "deploy_mode": "operator",
+      "acceptance": [
+        "_pr_meta_cache tuple shape changes from (timestamp, dict) to (timestamp, dict, err) where err is None on success and a non-empty error string on failure",
+        "_fetch_pr_labels returns the cached err on every cache hit until the next successful refetch (not just the first poll after failure)",
+        "on a successful refetch the cached err is cleared back to None",
+        "_reset_pr_label_cache test hook still works (sets _pr_meta_cache to None)",
+        "a unit test in _test_board_api.sh exercises three polls inside a single TTL window: first poll fails (gh returns nonzero), second poll within TTL returns the cached error (not None) and an empty labels dict, third poll after a forced cache reset succeeds and clears the error",
+        "the existing PLAN-06 T7 tests in _test_board_api.sh still pass unchanged",
+        "shellcheck clean on _test_board_api.sh",
+        "kit-drift CI passes (root install in sync via kit-upgrade.sh --apply)"
+      ]
+    },
+    "3": {
+      "title": "Surface state-file corruption in `api_costs` instead of zero'ing the panel",
+      "depends_on": [],
+      "touches": [
+        "orchestrator-kit/.claude/scripts/dashboard/api_costs.py",
+        "orchestrator-kit/.claude/scripts/dashboard/api_board.py",
+        ".claude/scripts/dashboard/api_costs.py",
+        ".claude/scripts/dashboard/api_board.py",
+        "orchestrator-kit/tests/_test_board_api.sh"
+      ],
+      "issue": 59,
+      "pr": null,
+      "status": "pending",
+      "retries": 0,
+      "deploy_mode": "operator",
+      "acceptance": [
+        "_load_state in api_costs.py emits a log.warning naming the path and exception type when OSError or ValueError occurs",
+        "_load_state continues to return empty dict on failure (do not raise — callers depend on this contract) but the warning is logged unconditionally on every load failure",
+        "api_costs.py exposes a module-level function load_errors that returns a list of strings containing the accumulated load error messages from the most recent cost_today or tokens_today or per-task aggregation call",
+        "the error list is reset at the start of each aggregation pass (cost_today, tokens_today, the /api/costs route) so stale errors do not leak across requests",
+        "api_board.py /api/board endpoint calls api_costs.load_errors after building the board and folds the messages into the existing errors payload with a source label like api_costs",
+        "the module docstring at the top of api_costs.py is updated to remove the claim that load failures return zero silently — the new policy is return fallback but log and surface via load_errors",
+        "a unit test in _test_board_api.sh writes a truncated state.json fixture, calls cost_today, asserts the result is the expected fallback AND that load_errors returns a non-empty list whose entry mentions the bad path",
+        "the existing PLAN-06 T7 tests still pass",
+        "shellcheck clean on _test_board_api.sh",
+        "kit-drift CI passes (root install in sync via kit-upgrade.sh --apply)"
+      ]
+    },
+    "4": {
+      "title": "Replace blanket except Exception in /api/costs route with per-file scoping",
+      "depends_on": [],
+      "touches": [
+        "orchestrator-kit/.claude/scripts/dashboard/api_costs.py",
+        ".claude/scripts/dashboard/api_costs.py",
+        "orchestrator-kit/tests/_test_board_api.sh"
+      ],
+      "issue": 60,
+      "pr": null,
+      "status": "pending",
+      "retries": 0,
+      "deploy_mode": "operator",
+      "acceptance": [
+        "the blanket except Exception wrapping the entire /api/costs route body (around line 403-404 in api_costs.py) is removed",
+        "try/except is moved to the inner per-state-file loop and catches only OSError, json.JSONDecodeError, ValueError, and KeyError (the schema-drift family) — not bare Exception",
+        "caught errors are appended to a payload-level errors list which is included in the response envelope",
+        "uncaught programmer errors (AttributeError, TypeError, RuntimeError) propagate to Flask and produce a 500 — so they show up in dashboard.log and the frontend transient-error rendering path",
+        "the existing happy-path /api/costs test in _test_board_api.sh still passes",
+        "a new test exercises the per-file catch: a state file with a malformed task dict triggers a KeyError inside the loop, the route returns 200 with errors list containing a message mentioning the bad path, and the per_task payload contains entries from the OTHER (good) state files",
+        "shellcheck clean on _test_board_api.sh",
+        "kit-drift CI passes (root install in sync via kit-upgrade.sh --apply)"
+      ]
+    }
+  },
+  "auto_merge_overrides": {},
+  "auto_recommended": false,
+  "ingested_at": "2026-05-29T02:06:01Z"
+}

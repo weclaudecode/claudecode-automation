@@ -1,0 +1,92 @@
+<h2>Spec written + committed</h2>
+<p class="subtitle">Repo created, spec committed. Please review the file before I write the implementation plan.</p>
+
+<style>
+  :root {
+    --bg-0: #030410; --bg-1: #06081a; --bg-2: #0a0e24;
+    --brand: #7c4dff; --brand-soft: rgba(124,77,255,.18);
+    --success: #34d399; --success-soft: rgba(52,211,153,.16);
+    --text: rgba(255,255,255,.94); --text-dim: rgba(255,255,255,.6); --border: rgba(255,255,255,.08);
+  }
+  .shell { background: radial-gradient(circle at 30% 0%, rgba(124,77,255,.15), transparent 55%), linear-gradient(180deg, var(--bg-0), var(--bg-1) 50%, var(--bg-2)); border-radius: 14px; padding: 20px; border: 1px solid rgba(124,77,255,.15); color: var(--text); }
+  .panel { background: rgba(255,255,255,.04); backdrop-filter: blur(20px) saturate(140%); border: 1px solid var(--border); border-radius: 12px; padding: 18px; box-shadow: 0 12px 40px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.06); }
+  .file-card { display: flex; gap: 12px; align-items: center; padding: 12px; background: rgba(52,211,153,.06); border: 1px solid rgba(52,211,153,.3); border-radius: 8px; margin-bottom: 14px; }
+  .file-card .check { width: 28px; height: 28px; border-radius: 50%; background: var(--success); display: flex; align-items: center; justify-content: center; color: #062; font-weight: 700; box-shadow: 0 0 14px rgba(52,211,153,.5); flex-shrink: 0; position: relative; }
+  .file-card .check::after { content: ""; position: absolute; width: 14px; height: 6px; border-left: 2.5px solid #062; border-bottom: 2.5px solid #062; transform: rotate(-45deg); top: 9px; left: 7px; }
+  .file-card .file-info .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #6ee7b7; }
+  .file-card .file-info .path { font-family: ui-monospace, SF Mono, Menlo, monospace; font-size: 11.5px; color: white; }
+  .commit-card { background: rgba(0,0,0,.35); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; font-family: ui-monospace, SF Mono, Menlo, monospace; font-size: 11px; color: var(--text); }
+  .commit-card .sha { color: #c8b3ff; font-weight: 700; }
+  .commit-card .subject { color: white; margin: 4px 0; }
+  .commit-card .body { color: var(--text-dim); font-size: 10.5px; line-height: 1.55; }
+
+  .toc-spec { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; font-size: 11.5px; margin-top: 12px; }
+  .toc-spec .item { padding: 4px 0; border-bottom: 1px dashed var(--border); color: var(--text); display: flex; gap: 8px; }
+  .toc-spec .item .n { color: #c8b3ff; font-weight: 700; font-family: ui-monospace, monospace; min-width: 22px; }
+
+  .action-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 18px; }
+  .action { padding: 14px; border-radius: 10px; cursor: pointer; transition: all .15s; border: 1.5px solid var(--border); background: rgba(255,255,255,.04); }
+  .action:hover { transform: translateY(-2px); }
+  .action.approve { border-color: rgba(52,211,153,.4); background: rgba(52,211,153,.08); }
+  .action.approve:hover { border-color: var(--success); box-shadow: 0 8px 24px rgba(52,211,153,.2); }
+  .action.tweak { border-color: rgba(255,165,0,.3); background: rgba(255,165,0,.06); }
+  .action.tweak:hover { border-color: #ffa500; box-shadow: 0 8px 24px rgba(255,165,0,.18); }
+  .action .head { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; }
+  .action .head .ic { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; color: white; }
+  .action.approve .head .ic { background: var(--success); box-shadow: 0 0 14px rgba(52,211,153,.5); }
+  .action.tweak .head .ic { background: #ffa500; box-shadow: 0 0 14px rgba(255,165,0,.4); }
+  .action .h { color: white; font-weight: 700; font-size: 13px; }
+  .action .desc { color: var(--text-dim); font-size: 11px; line-height: 1.5; margin-top: 4px; }
+</style>
+
+<div class="shell">
+
+  <div class="panel">
+
+    <div class="file-card">
+      <div class="check"></div>
+      <div class="file-info">
+        <div class="lbl">SPEC FILE</div>
+        <div class="path">~/Documents/github/dev-artifact-viewer/docs/superpowers/specs/2026-05-26-dev-artifact-viewer-design.md</div>
+      </div>
+    </div>
+
+    <div class="commit-card">
+      <div><span class="sha">031c12a</span> · master (root commit)</div>
+      <div class="subject">docs: add design spec for dev-artifact-viewer</div>
+      <div class="body">Initial brainstorm output for a local-first viewer of development artifacts (ADRs, plans, reviews, runbooks, specs) across all projects in ~/Documents/github/. Hybrid topology: per-project mode + cross-cutting portal. Astro static build with React islands. Crystal glass-morphism palette with semantic purple/emerald/coral/amber tokens. MD stays the source of truth.</div>
+    </div>
+
+    <div style="font-size: 12px; color: var(--text); font-weight: 600; margin-bottom: 6px;">Sections in the spec</div>
+    <div class="toc-spec">
+      <div class="item"><span class="n">1</span>Goal</div>
+      <div class="item"><span class="n">2</span>Context (why this exists)</div>
+      <div class="item"><span class="n">3</span>Non-goals</div>
+      <div class="item"><span class="n">4</span>Decisions summary (10 locked)</div>
+      <div class="item"><span class="n">5</span>Architecture (engine + 2 entry points)</div>
+      <div class="item"><span class="n">6</span>Components (viewer / skill / CLI)</div>
+      <div class="item"><span class="n">7</span>Data model (frontmatter schemas)</div>
+      <div class="item"><span class="n">8</span>Per-type rendering specs (6 layouts)</div>
+      <div class="item"><span class="n">9</span>Visual system (Crystal tokens)</div>
+      <div class="item"><span class="n">10</span>Index / portal page</div>
+      <div class="item"><span class="n">11</span>Workflow</div>
+      <div class="item"><span class="n">12</span>Error handling</div>
+      <div class="item"><span class="n">13</span>Testing</div>
+      <div class="item"><span class="n">14</span>Performance</div>
+      <div class="item"><span class="n">15</span>Scope boundaries</div>
+      <div class="item"><span class="n">16</span>Open risks &amp; future work</div>
+    </div>
+
+    <div class="action-row">
+      <div class="action approve option" data-choice="approve-spec" onclick="toggleSelect(this)">
+        <div class="head"><div class="ic">A</div><div class="h">Approve as written</div></div>
+        <div class="desc">I'll invoke the writing-plans skill next to produce a task-by-task implementation plan covering engine scaffold → per-type layouts → islands → CLI → skill → tests.</div>
+      </div>
+      <div class="action tweak option" data-choice="request-changes" onclick="toggleSelect(this)">
+        <div class="head"><div class="ic">B</div><div class="h">Tweak something first</div></div>
+        <div class="desc">Tell me in terminal what to adjust — section, missing concern, wording, scope change. I'll edit, re-commit, and ask again.</div>
+      </div>
+    </div>
+
+  </div>
+</div>

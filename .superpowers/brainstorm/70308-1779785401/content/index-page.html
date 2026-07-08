@@ -1,0 +1,375 @@
+<h2>Question 8 — Portal / index page (search + filter)</h2>
+<p class="subtitle">Same page works as project index (auto-scoped to current project) and as portal (all projects). React island. Pick which interactive features you actually want.</p>
+
+<style>
+  :root {
+    --bg-0: #030410; --bg-1: #06081a; --bg-2: #0a0e24;
+    --brand: #7c4dff; --brand-soft: rgba(124,77,255,.18); --brand-glow: rgba(124,77,255,.55);
+    --success: #34d399; --success-soft: rgba(52,211,153,.16); --success-glow: rgba(52,211,153,.5);
+    --alert: #ff5577; --alert-soft: rgba(255,85,119,.16); --alert-glow: rgba(255,85,119,.55);
+    --warn: #ffa500; --warn-soft: rgba(255,165,0,.16);
+    --text: rgba(255,255,255,.94); --text-dim: rgba(255,255,255,.6); --border: rgba(255,255,255,.08);
+  }
+  .shell {
+    background: radial-gradient(circle at 30% 0%, rgba(124,77,255,.15), transparent 55%),
+                linear-gradient(180deg, var(--bg-0), var(--bg-1) 50%, var(--bg-2));
+    border-radius: 14px; padding: 18px; border: 1px solid rgba(124,77,255,.15);
+  }
+
+  /* Full-width mock */
+  .portal-mock {
+    background: rgba(255,255,255,.04);
+    backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 12px 40px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.06);
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+    font-size: 11px;
+    color: var(--text);
+  }
+  .portal-mock .topbar {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(0,0,0,.3);
+    display: flex; gap: 10px; align-items: center;
+  }
+  .portal-mock .topbar .logo {
+    font-weight: 700; color: white; font-size: 12px;
+    background: linear-gradient(135deg, var(--brand), #b388ff);
+    padding: 2px 8px; border-radius: 4px;
+    box-shadow: 0 0 12px var(--brand-glow);
+  }
+  .portal-mock .topbar .breadcrumb { color: var(--text-dim); font-size: 11px; }
+  .portal-mock .topbar .mode-toggle { margin-left: auto; display: flex; gap: 4px; background: rgba(0,0,0,.4); padding: 2px; border-radius: 6px; border: 1px solid var(--border); }
+  .portal-mock .topbar .mode-toggle .m { padding: 3px 8px; border-radius: 4px; font-size: 10px; color: var(--text-dim); cursor: pointer; }
+  .portal-mock .topbar .mode-toggle .m.active { background: var(--brand); color: white; box-shadow: 0 0 10px var(--brand-glow); }
+
+  /* search bar */
+  .search-bar {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex; gap: 8px; align-items: center;
+  }
+  .search-input {
+    flex: 1;
+    background: rgba(0,0,0,.4);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: var(--text);
+    font-size: 12px;
+    font-family: inherit;
+  }
+  .search-input::after {
+    content: "type:adr clerk auth"; color: var(--text-dim);
+  }
+  .search-hint { font-size: 9.5px; color: var(--text-dim); }
+  .kbd { display: inline-block; background: rgba(255,255,255,.06); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; font-size: 9px; color: var(--text-dim); font-family: ui-monospace, monospace; }
+
+  /* body */
+  .portal-body { display: grid; grid-template-columns: 230px 1fr; min-height: 350px; }
+  .filter-rail {
+    border-right: 1px solid var(--border);
+    padding: 14px;
+    background: rgba(0,0,0,.15);
+  }
+  .filter-rail .group { margin-bottom: 14px; }
+  .filter-rail .grp-h { font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
+  .filter-rail .grp-h .clear { font-size: 9px; color: var(--brand); cursor: pointer; opacity: 0; }
+  .filter-rail .group.has-selection .grp-h .clear { opacity: 1; }
+
+  .chip-row { display: flex; flex-wrap: wrap; gap: 4px; }
+  .fchip {
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 3px 7px;
+    border-radius: 10px;
+    font-size: 10px;
+    cursor: pointer;
+    display: flex; gap: 4px; align-items: center;
+  }
+  .fchip:hover { border-color: var(--brand); }
+  .fchip.on { background: var(--brand-soft); border-color: var(--brand); color: #c8b3ff; box-shadow: 0 0 10px var(--brand-glow); }
+  .fchip.on.success { background: var(--success-soft); border-color: var(--success); color: #6ee7b7; }
+  .fchip.on.alert { background: var(--alert-soft); border-color: var(--alert); color: #ff8da6; }
+  .fchip .count { font-size: 9px; opacity: .6; font-weight: 600; }
+  .fchip.on .count { opacity: 1; }
+
+  /* results */
+  .results { padding: 8px; }
+  .results-header { padding: 4px 10px 8px; display: flex; justify-content: space-between; font-size: 10px; color: var(--text-dim); border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+
+  .row-item {
+    padding: 10px 12px;
+    border-radius: 8px;
+    margin-bottom: 4px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all .12s;
+    display: grid;
+    grid-template-columns: 56px 60px 1fr 100px;
+    gap: 10px;
+    align-items: center;
+  }
+  .row-item:hover { background: rgba(124,77,255,.06); border-color: var(--brand); }
+  .row-item .type-badge {
+    background: var(--brand-soft);
+    color: #c8b3ff;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-align: center;
+  }
+  .row-item .type-badge.plan { background: rgba(255,165,0,.16); color: #ffd58a; border: 1px solid rgba(255,165,0,.3); }
+  .row-item .type-badge.review { background: rgba(255,85,119,.16); color: #ff8da6; border: 1px solid rgba(255,85,119,.3); }
+  .row-item .type-badge.runbook { background: rgba(52,211,153,.16); color: #6ee7b7; border: 1px solid rgba(52,211,153,.3); }
+  .row-item .type-badge.spec { background: var(--brand-soft); color: #c8b3ff; border: 1px solid var(--brand); }
+
+  .proj-tag { font-size: 9.5px; color: var(--text-dim); }
+  .item-main .title { color: white; font-size: 11.5px; font-weight: 600; margin-bottom: 2px; }
+  .item-main .snippet { color: var(--text-dim); font-size: 10px; line-height: 1.4; }
+  .item-meta { text-align: right; font-size: 9.5px; color: var(--text-dim); display: flex; flex-direction: column; gap: 2px; align-items: flex-end; }
+  .badge { padding: 2px 6px; border-radius: 3px; font-size: 9px; font-weight: 700; letter-spacing: .04em; }
+  .badge.done { background: var(--success-soft); color: #6ee7b7; border: 1px solid var(--success); }
+  .badge.blocked { background: var(--alert-soft); color: #ff8da6; border: 1px solid var(--alert); }
+  .badge.draft { background: var(--warn-soft); color: #ffd58a; border: 1px solid var(--warn); }
+  .badge.active { background: var(--brand-soft); color: #c8b3ff; border: 1px solid var(--brand); }
+  .badge.muted { background: rgba(255,255,255,.05); color: var(--text-dim); border: 1px solid var(--border); }
+
+  /* mini progress bar in result */
+  .mini-prog { width: 60px; height: 3px; background: rgba(255,255,255,.06); border-radius: 2px; overflow: hidden; margin-top: 3px; }
+  .mini-prog .f { height: 100%; background: linear-gradient(90deg, var(--brand), var(--success)); }
+
+  /* feature list at bottom */
+  .features-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+  .feat {
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex; gap: 10px; align-items: flex-start;
+  }
+  .feat .icon { color: var(--brand); font-size: 14px; font-weight: 700; margin-top: 1px; }
+  .feat .name { color: white; font-weight: 600; font-size: 12px; margin-bottom: 3px; }
+  .feat .desc { font-size: 11px; color: var(--text-dim); line-height: 1.4; }
+</style>
+
+<div class="shell">
+
+<!-- Live mockup of the portal index page -->
+<div class="portal-mock">
+
+  <div class="topbar">
+    <div class="logo">DOCS</div>
+    <div class="breadcrumb">portal · all projects</div>
+    <div class="mode-toggle">
+      <div class="m">Project</div>
+      <div class="m active">Portal</div>
+    </div>
+  </div>
+
+  <div class="search-bar">
+    <div class="search-input" style="display:flex;align-items:center;gap:6px">
+      <span style="opacity:.5">search</span>
+      <span style="color:#c8b3ff">type:adr</span>
+      <span style="opacity:.85">clerk auth</span>
+      <span style="opacity:.4">|</span>
+    </div>
+    <span class="search-hint"><span class="kbd">/</span> focus · <span class="kbd">⌘K</span> palette</span>
+  </div>
+
+  <div class="portal-body">
+
+    <div class="filter-rail">
+      <div class="group has-selection">
+        <div class="grp-h"><span>Type</span><span class="clear">clear</span></div>
+        <div class="chip-row">
+          <div class="fchip on">ADR <span class="count">15</span></div>
+          <div class="fchip">Plan <span class="count">8</span></div>
+          <div class="fchip">Review <span class="count">3</span></div>
+          <div class="fchip">Runbook <span class="count">9</span></div>
+          <div class="fchip">Spec <span class="count">4</span></div>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="grp-h"><span>Project</span><span class="clear">clear</span></div>
+        <div class="chip-row">
+          <div class="fchip">aiden_agent <span class="count">18</span></div>
+          <div class="fchip">forge <span class="count">12</span></div>
+          <div class="fchip">data-entry <span class="count">5</span></div>
+          <div class="fchip">accounting <span class="count">3</span></div>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="grp-h"><span>Status</span><span class="clear">clear</span></div>
+        <div class="chip-row">
+          <div class="fchip on success">Accepted <span class="count">11</span></div>
+          <div class="fchip">Proposed <span class="count">2</span></div>
+          <div class="fchip">Superseded <span class="count">2</span></div>
+          <div class="fchip on alert">Blocked <span class="count">1</span></div>
+          <div class="fchip">Active <span class="count">3</span></div>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="grp-h"><span>Tag</span><span class="clear">clear</span></div>
+        <div class="chip-row">
+          <div class="fchip">auth <span class="count">7</span></div>
+          <div class="fchip">gateway <span class="count">5</span></div>
+          <div class="fchip">clerk <span class="count">4</span></div>
+          <div class="fchip">cdk <span class="count">6</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="results">
+      <div class="results-header">
+        <span>12 results · sorted by <span style="color:#c8b3ff">updated ↓</span></span>
+        <span>group by: <span style="color:#c8b3ff">none</span> · <span>type</span> · <span>project</span></span>
+      </div>
+
+      <div class="row-item">
+        <span class="type-badge">ADR-008</span>
+        <span class="proj-tag">aiden</span>
+        <div class="item-main">
+          <div class="title">Clerk JWT via JWKS (RS256) — replaces legacy HS256 path</div>
+          <div class="snippet">ADR-002 and ADR-004 designed the chat-proxy around Clerk's legacy Supabase JWT template…</div>
+        </div>
+        <div class="item-meta">
+          <span class="badge done">ACCEPTED</span>
+          <span>2 days ago</span>
+        </div>
+      </div>
+
+      <div class="row-item">
+        <span class="type-badge plan">PLAN</span>
+        <span class="proj-tag">aiden</span>
+        <div class="item-main">
+          <div class="title">Phase 9a — Gateway Interceptor + list_my_properties POC</div>
+          <div class="snippet">Make list_my_properties reachable end-to-end via Gateway against staging Supabase…</div>
+          <div class="mini-prog"><div class="f" style="width:42%"></div></div>
+        </div>
+        <div class="item-meta">
+          <span class="badge active">ACTIVE · 14/33</span>
+          <span>2 days ago</span>
+        </div>
+      </div>
+
+      <div class="row-item">
+        <span class="type-badge">ADR-010</span>
+        <span class="proj-tag">aiden</span>
+        <div class="item-main">
+          <div class="title">Gateway interceptor JWT passthrough</div>
+          <div class="snippet">Inbound auth flips AWS_IAM → CUSTOM_JWT. Interceptor Lambda echoes Authorization…</div>
+        </div>
+        <div class="item-meta">
+          <span class="badge draft">PROPOSED</span>
+          <span>3 days ago</span>
+        </div>
+      </div>
+
+      <div class="row-item">
+        <span class="type-badge review">AUDIT</span>
+        <span class="proj-tag">data-entry</span>
+        <div class="item-main">
+          <div class="title">Codebase audit — RLS, secrets, schema</div>
+          <div class="snippet">10 findings, 5 fixed, 2 open (HIGH), 3 investigating…</div>
+        </div>
+        <div class="item-meta">
+          <span class="badge blocked">2 OPEN HIGH</span>
+          <span>5 days ago</span>
+        </div>
+      </div>
+
+      <div class="row-item">
+        <span class="type-badge">ADR-003</span>
+        <span class="proj-tag">forge</span>
+        <div class="item-main">
+          <div class="title">OAuth scope reconsent flow</div>
+          <div class="snippet">When a downstream OAuth scope changes mid-session, the harness must…</div>
+        </div>
+        <div class="item-meta">
+          <span class="badge done">ACCEPTED</span>
+          <span>1 wk ago</span>
+        </div>
+      </div>
+
+      <div class="row-item">
+        <span class="type-badge runbook">RUN</span>
+        <span class="proj-tag">aiden</span>
+        <div class="item-main">
+          <div class="title">Phase 11 acceptance — staging cutover smoke</div>
+          <div class="snippet">Pre-req: ADR-010 deployed. Steps: 1. Verify interceptor logs…</div>
+        </div>
+        <div class="item-meta">
+          <span class="badge muted">MANUAL</span>
+          <span>4 days ago</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="features-grid">
+  <div class="feat">
+    <div class="icon">→</div>
+    <div>
+      <div class="name">Structured search</div>
+      <div class="desc">Free text + <code>type:adr</code>, <code>project:forge</code>, <code>status:open</code>, <code>tag:clerk</code>. <code>⌘K</code> opens a command palette with the same syntax.</div>
+    </div>
+  </div>
+  <div class="feat">
+    <div class="icon">→</div>
+    <div>
+      <div class="name">Filter chips with counts</div>
+      <div class="desc">Multi-select per dimension. Counts update live as you stack filters. Click an "on" chip again to clear it.</div>
+    </div>
+  </div>
+  <div class="feat">
+    <div class="icon">→</div>
+    <div>
+      <div class="name">Project ↔ Portal toggle</div>
+      <div class="desc">Top-right toggle. Project mode auto-applies <code>project:<em>current</em></code>. Portal removes it for cross-cutting view.</div>
+    </div>
+  </div>
+  <div class="feat">
+    <div class="icon">→</div>
+    <div>
+      <div class="name">Smart sort + group</div>
+      <div class="desc">Sort: updated / created / status. Group by: none / type / project / status. State persists per browser.</div>
+    </div>
+  </div>
+  <div class="feat">
+    <div class="icon">→</div>
+    <div>
+      <div class="name">Inline progress</div>
+      <div class="desc">Plan rows show mini progress bar + <code>14/33</code>. Audit rows show open/fixed counts. Type-aware in the index.</div>
+    </div>
+  </div>
+  <div class="feat">
+    <div class="icon">→</div>
+    <div>
+      <div class="name">Keyboard-first</div>
+      <div class="desc"><code>/</code> focus search · <code>⌘K</code> palette · <code>j/k</code> nav results · <code>enter</code> open · <code>f</code> toggle filter rail.</div>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<div class="section" style="margin-top: 16px; font-size: 13px; color: white; opacity: .9;">
+  <strong>Default scope:</strong> all six features above. Click anywhere to confirm. In terminal — strip anything you don't want, or add what's missing (e.g. "drop ⌘K palette, just search box is fine", "I want a 'recently touched files' view too", "add a kanban-style view for plans").
+</div>
+
+<div class="options" style="display:none">
+  <div class="option" data-choice="confirm-index" onclick="toggleSelect(this)"></div>
+</div>
+
+</div>

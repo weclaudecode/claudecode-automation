@@ -1,0 +1,234 @@
+<h2>Question 6 — Visual style: glass + sharp colors</h2>
+<p class="subtitle">Three palettes, each glassy (frosted panels, blur, layered translucency) but with a distinct sharp-color personality. Pick what feels right to look at for hours.</p>
+
+<style>
+  .pal-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-top: 12px; }
+  .pal { border-radius: 14px; padding: 14px; cursor: pointer; transition: all .2s ease; display: flex; flex-direction: column; gap: 10px; position: relative; overflow: hidden; }
+  .pal:hover { transform: translateY(-3px); }
+  .pal .head { display: flex; gap: 10px; align-items: center; z-index: 2; position: relative; }
+  .pal .letter { width: 28px; height: 28px; border-radius: 50%; font-weight: 700; display: flex; align-items: center; justify-content: center; font-size: 14px; color: white; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,.25); }
+  .pal h3 { margin: 0; font-size: 16px; color: #fff; z-index: 2; position: relative; }
+  .pal .sub { font-size: 11px; opacity: .8; color: #fff; z-index: 2; position: relative; }
+
+  /* swatches */
+  .swatch-row { display: flex; gap: 4px; z-index: 2; position: relative; }
+  .swatch { width: 32px; height: 32px; border-radius: 6px; border: 1px solid rgba(255,255,255,.15); box-shadow: 0 4px 12px rgba(0,0,0,.4); }
+
+  /* === A: AURORA === */
+  .aurora { background:
+    radial-gradient(circle at 0% 0%, rgba(0,229,255,.35), transparent 50%),
+    radial-gradient(circle at 100% 100%, rgba(255,46,204,.3), transparent 50%),
+    linear-gradient(135deg, #0a0e27, #1a1147 60%, #2d1b4e);
+    border: 1px solid rgba(0,229,255,.25);
+  }
+  .aurora:hover { border-color: #00e5ff; box-shadow: 0 10px 40px rgba(0,229,255,.25); }
+  .aurora .letter { background: linear-gradient(135deg, #00e5ff, #ff2ecc); }
+
+  /* === B: CYBER === */
+  .cyber { background:
+    radial-gradient(circle at 100% 0%, rgba(57,255,20,.25), transparent 55%),
+    radial-gradient(circle at 0% 100%, rgba(255,0,166,.2), transparent 55%),
+    linear-gradient(135deg, #050505, #0d0d0d 60%, #1a0a14);
+    border: 1px solid rgba(57,255,20,.3);
+  }
+  .cyber:hover { border-color: #39ff14; box-shadow: 0 10px 40px rgba(57,255,20,.22); }
+  .cyber .letter { background: linear-gradient(135deg, #39ff14, #ff00a6); }
+
+  /* === C: CRYSTAL === */
+  .crystal { background:
+    radial-gradient(circle at 50% 0%, rgba(124,77,255,.35), transparent 55%),
+    radial-gradient(circle at 100% 100%, rgba(255,165,0,.18), transparent 50%),
+    linear-gradient(135deg, #0c0f1a, #161b35 60%, #1f2a4e);
+    border: 1px solid rgba(124,77,255,.3);
+  }
+  .crystal:hover { border-color: #7c4dff; box-shadow: 0 10px 40px rgba(124,77,255,.25); }
+  .crystal .letter { background: linear-gradient(135deg, #7c4dff, #ffa500); }
+
+  /* glass panel inside palette card (the mini mock) */
+  .glass-mock {
+    background: rgba(255,255,255,.06);
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 10px;
+    padding: 0;
+    overflow: hidden;
+    z-index: 2;
+    position: relative;
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+    font-size: 9px;
+    line-height: 1.5;
+    box-shadow: 0 8px 24px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.08);
+  }
+  .glass-mock .topbar {
+    padding: 5px 8px;
+    border-bottom: 1px solid rgba(255,255,255,.08);
+    font-size: 8.5px;
+    color: rgba(255,255,255,.6);
+    display: flex; gap: 6px; align-items: center;
+  }
+  .glass-mock .body { padding: 8px 10px; }
+
+  .glass-mock .h1 { font-size: 11px; font-weight: 700; color: #fff; margin-bottom: 6px; }
+
+  .glass-mock .status-strip {
+    display: flex; gap: 6px; align-items: center;
+    margin-bottom: 8px; padding: 6px 8px;
+    border-radius: 6px;
+    background: rgba(0,0,0,.25);
+    border: 1px solid rgba(255,255,255,.06);
+  }
+  .glass-mock .status-strip .badge {
+    padding: 2px 7px; border-radius: 4px;
+    font-size: 8.5px; font-weight: 700; letter-spacing: .04em;
+  }
+  .glass-mock .progress { flex: 1; height: 5px; background: rgba(255,255,255,.08); border-radius: 3px; overflow: hidden; }
+  .glass-mock .progress .fill { height: 100%; width: 42%; }
+  .glass-mock .small { font-size: 8.5px; color: rgba(255,255,255,.7); }
+
+  .glass-mock .task {
+    background: rgba(255,255,255,.04);
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 5px;
+    padding: 4px 7px;
+    margin-bottom: 4px;
+    display: flex; gap: 6px; align-items: center;
+    color: rgba(255,255,255,.9);
+    font-size: 9px;
+  }
+  .glass-mock .task .ck {
+    width: 10px; height: 10px;
+    border-radius: 3px;
+    border: 1px solid rgba(255,255,255,.25);
+  }
+  .glass-mock .task .bar { flex: 1; height: 3px; background: rgba(255,255,255,.06); border-radius: 2px; overflow: hidden; }
+  .glass-mock .task .bar .f { height: 100%; }
+
+  /* Aurora glow */
+  .aurora .badge.phase { background: linear-gradient(135deg, #00e5ff, #00b8d4); color: #001823; box-shadow: 0 0 12px rgba(0,229,255,.55); }
+  .aurora .badge.active { background: rgba(255,46,204,.2); color: #ff8be0; border: 1px solid #ff2ecc; }
+  .aurora .progress .fill { background: linear-gradient(90deg, #00e5ff, #ff2ecc); box-shadow: 0 0 10px rgba(0,229,255,.6); }
+  .aurora .task .ck.done { background: #00e5ff; border-color: #00e5ff; box-shadow: 0 0 8px rgba(0,229,255,.7); }
+  .aurora .task .bar .f { background: linear-gradient(90deg, #00e5ff, #ff2ecc); }
+
+  /* Cyber glow */
+  .cyber .badge.phase { background: #39ff14; color: #000; box-shadow: 0 0 12px rgba(57,255,20,.6); }
+  .cyber .badge.active { background: rgba(255,0,166,.18); color: #ff66d4; border: 1px solid #ff00a6; }
+  .cyber .progress .fill { background: linear-gradient(90deg, #39ff14, #ff00a6); box-shadow: 0 0 10px rgba(57,255,20,.55); }
+  .cyber .task .ck.done { background: #39ff14; border-color: #39ff14; box-shadow: 0 0 8px rgba(57,255,20,.6); }
+  .cyber .task .bar .f { background: linear-gradient(90deg, #39ff14, #ff00a6); }
+
+  /* Crystal glow */
+  .crystal .badge.phase { background: linear-gradient(135deg, #7c4dff, #b388ff); color: #fff; box-shadow: 0 0 12px rgba(124,77,255,.6); }
+  .crystal .badge.active { background: rgba(255,165,0,.18); color: #ffc966; border: 1px solid #ffa500; }
+  .crystal .progress .fill { background: linear-gradient(90deg, #7c4dff, #ffa500); box-shadow: 0 0 10px rgba(124,77,255,.5); }
+  .crystal .task .ck.done { background: #7c4dff; border-color: #7c4dff; box-shadow: 0 0 8px rgba(124,77,255,.6); }
+  .crystal .task .bar .f { background: linear-gradient(90deg, #7c4dff, #ffa500); }
+
+  .vibe { font-size: 11px; font-style: italic; color: rgba(255,255,255,.75); z-index: 2; position: relative; }
+</style>
+
+<div class="pal-grid">
+
+  <!-- A: Aurora -->
+  <div class="layout option pal aurora" data-choice="aurora" onclick="toggleSelect(this)">
+    <div class="head"><div class="letter">A</div><div><h3>Aurora</h3><div class="sub">Midnight + electric cyan + neon magenta</div></div></div>
+
+    <div class="swatch-row">
+      <div class="swatch" style="background:#0a0e27"></div>
+      <div class="swatch" style="background:#1a1147"></div>
+      <div class="swatch" style="background:#00e5ff;box-shadow:0 0 12px #00e5ff80"></div>
+      <div class="swatch" style="background:#ff2ecc;box-shadow:0 0 12px #ff2ecc80"></div>
+      <div class="swatch" style="background:linear-gradient(135deg,#00e5ff,#ff2ecc)"></div>
+    </div>
+
+    <div class="glass-mock">
+      <div class="topbar"><span>aiden_agent</span><span style="opacity:.4">/</span><span>plans</span><span style="opacity:.4">/</span><span>Phase 9a</span></div>
+      <div class="body">
+        <div class="h1">Phase 9a — Gateway Interceptor</div>
+        <div class="status-strip">
+          <span class="badge phase">PHASE 9a</span>
+          <span class="badge active">ACTIVE</span>
+          <div class="progress"><div class="fill"></div></div>
+          <span class="small">14/33</span>
+        </div>
+        <div class="task"><div class="ck done"></div><span style="flex:1">Task 1 — Interceptor handler</span><div class="bar"><div class="f" style="width:100%"></div></div></div>
+        <div class="task"><div class="ck done"></div><span style="flex:1">Task 2 — ToolsStack construct</span><div class="bar"><div class="f" style="width:100%"></div></div></div>
+        <div class="task"><div class="ck"></div><span style="flex:1">Task 3 — API Key Provider</span><div class="bar"><div class="f" style="width:0%"></div></div></div>
+      </div>
+    </div>
+
+    <div class="vibe">Cool, electric, dev-tool-luxe. Reads like a Linear x Vercel collaboration.</div>
+  </div>
+
+  <!-- B: Cyber -->
+  <div class="layout option pal cyber" data-choice="cyber" onclick="toggleSelect(this)">
+    <div class="head"><div class="letter">B</div><div><h3>Cyber</h3><div class="sub">Pure black + lime + hot magenta</div></div></div>
+
+    <div class="swatch-row">
+      <div class="swatch" style="background:#050505"></div>
+      <div class="swatch" style="background:#0d0d0d"></div>
+      <div class="swatch" style="background:#39ff14;box-shadow:0 0 12px #39ff1480"></div>
+      <div class="swatch" style="background:#ff00a6;box-shadow:0 0 12px #ff00a680"></div>
+      <div class="swatch" style="background:linear-gradient(135deg,#39ff14,#ff00a6)"></div>
+    </div>
+
+    <div class="glass-mock">
+      <div class="topbar"><span>aiden_agent</span><span style="opacity:.4">/</span><span>plans</span><span style="opacity:.4">/</span><span>Phase 9a</span></div>
+      <div class="body">
+        <div class="h1">Phase 9a — Gateway Interceptor</div>
+        <div class="status-strip">
+          <span class="badge phase">PHASE 9a</span>
+          <span class="badge active">ACTIVE</span>
+          <div class="progress"><div class="fill"></div></div>
+          <span class="small">14/33</span>
+        </div>
+        <div class="task"><div class="ck done"></div><span style="flex:1">Task 1 — Interceptor handler</span><div class="bar"><div class="f" style="width:100%"></div></div></div>
+        <div class="task"><div class="ck done"></div><span style="flex:1">Task 2 — ToolsStack construct</span><div class="bar"><div class="f" style="width:100%"></div></div></div>
+        <div class="task"><div class="ck"></div><span style="flex:1">Task 3 — API Key Provider</span><div class="bar"><div class="f" style="width:0%"></div></div></div>
+      </div>
+    </div>
+
+    <div class="vibe">High-contrast cyberpunk. Maximum punch, minimum eye-strain at night.</div>
+  </div>
+
+  <!-- C: Crystal -->
+  <div class="layout option pal crystal" data-choice="crystal" onclick="toggleSelect(this)">
+    <div class="head"><div class="letter">C</div><div><h3>Crystal</h3><div class="sub">Indigo + violet + warm amber</div></div></div>
+
+    <div class="swatch-row">
+      <div class="swatch" style="background:#0c0f1a"></div>
+      <div class="swatch" style="background:#161b35"></div>
+      <div class="swatch" style="background:#7c4dff;box-shadow:0 0 12px #7c4dff80"></div>
+      <div class="swatch" style="background:#ffa500;box-shadow:0 0 12px #ffa50080"></div>
+      <div class="swatch" style="background:linear-gradient(135deg,#7c4dff,#ffa500)"></div>
+    </div>
+
+    <div class="glass-mock">
+      <div class="topbar"><span>aiden_agent</span><span style="opacity:.4">/</span><span>plans</span><span style="opacity:.4">/</span><span>Phase 9a</span></div>
+      <div class="body">
+        <div class="h1">Phase 9a — Gateway Interceptor</div>
+        <div class="status-strip">
+          <span class="badge phase">PHASE 9a</span>
+          <span class="badge active">ACTIVE</span>
+          <div class="progress"><div class="fill"></div></div>
+          <span class="small">14/33</span>
+        </div>
+        <div class="task"><div class="ck done"></div><span style="flex:1">Task 1 — Interceptor handler</span><div class="bar"><div class="f" style="width:100%"></div></div></div>
+        <div class="task"><div class="ck done"></div><span style="flex:1">Task 2 — ToolsStack construct</span><div class="bar"><div class="f" style="width:100%"></div></div></div>
+        <div class="task"><div class="ck"></div><span style="flex:1">Task 3 — API Key Provider</span><div class="bar"><div class="f" style="width:0%"></div></div></div>
+      </div>
+    </div>
+
+    <div class="vibe">Refined and warm. Glass with character — feels like a premium tool.</div>
+  </div>
+
+</div>
+
+<div class="section" style="margin-top: 18px; font-size: 13px; opacity: .85;">
+  All three use the same glass system: frosted panels (<code>backdrop-filter: blur(20px) saturate(140%)</code>), inset light borders, subtle shadows. Only the accent colors and ambient radial-gradients differ.
+</div>
+
+<div class="section" style="margin-top: 8px; font-size: 12px; opacity: .65;">
+  Click A / B / C. In terminal, name any specific brand or product whose visual language you like ("looks like Linear", "I want it darker", "swap magenta for green"), and I'll tune.
+</div>

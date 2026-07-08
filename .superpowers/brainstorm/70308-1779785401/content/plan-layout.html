@@ -1,0 +1,215 @@
+<h2>Question 5 — Implementation Plan layout (mirroring aiden_agent)</h2>
+<p class="subtitle">Same 2-pane shell as ADR (C from last question). Plan-specific: status bar driven by parsing <code>- [ ]</code> vs <code>- [x]</code> in the MD. Two ways to visualize tasks differ — pick A or B.</p>
+
+<style>
+  .pl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; }
+  .layout { border: 1.5px solid rgba(255,255,255,.08); border-radius: 10px; padding: 12px; cursor: pointer; transition: all .15s ease; display: flex; flex-direction: column; gap: 10px; }
+  .layout:hover { border-color: #8b7cff; transform: translateY(-2px); box-shadow: 0 8px 20px rgba(139,124,255,.12); }
+  .layout .head { display: flex; gap: 10px; align-items: center; }
+  .layout .letter { width: 26px; height: 26px; border-radius: 50%; background: #8b7cff; color: white; font-weight: 700; display: flex; align-items: center; justify-content: center; font-size: 13px; }
+  .layout h3 { margin: 0; font-size: 15px; }
+  .layout .sub { font-size: 11px; opacity: .65; }
+  .mock { background: #16161a; border: 1px solid rgba(255,255,255,.08); border-radius: 6px; padding: 0; overflow: hidden; font-family: ui-monospace, SF Mono, Menlo, monospace; font-size: 9.5px; line-height: 1.45; min-height: 380px; display: flex; flex-direction: column; }
+  .mock .topbar { background: #0f0f12; padding: 5px 8px; border-bottom: 1px solid rgba(255,255,255,.06); font-size: 9px; opacity: .55; display: flex; gap: 10px; }
+  .status-strip { background: linear-gradient(90deg, rgba(139,124,255,.1), rgba(108,212,157,.06)); border-bottom: 1px solid rgba(255,255,255,.08); padding: 8px 10px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 9.5px; }
+  .status-strip .kv { display: flex; flex-direction: column; gap: 1px; }
+  .status-strip .k { font-size: 8px; text-transform: uppercase; opacity: .55; letter-spacing: .06em; }
+  .status-strip .v { font-size: 10px; color: #fff; font-weight: 600; }
+  .progress-bar { width: 100px; height: 5px; background: rgba(255,255,255,.08); border-radius: 3px; overflow: hidden; }
+  .progress-bar .fill { height: 100%; background: linear-gradient(90deg, #8b7cff, #6cd49d); width: 42%; }
+  .badge-phase { background: #8b7cff; color: white; padding: 2px 6px; border-radius: 3px; font-size: 9px; font-weight: 700; letter-spacing: .04em; }
+  .badge-active { background: #6cd49d; color: #111; padding: 1px 5px; border-radius: 3px; font-size: 8.5px; font-weight: 700; }
+  .body { flex: 1; display: flex; min-height: 0; }
+  .col-left { width: 30%; padding: 8px; border-right: 1px solid rgba(255,255,255,.05); background: rgba(255,255,255,.015); }
+  .col-main { flex: 1; padding: 10px; overflow: hidden; }
+  .label-mini { font-size: 8px; text-transform: uppercase; letter-spacing: .08em; opacity: .5; margin-bottom: 4px; }
+  .toc-item { font-size: 9px; padding: 2px 0; opacity: .8; display: flex; justify-content: space-between; }
+  .toc-item.done { color: #6cd49d; }
+  .toc-item.active { color: #c8beff; border-left: 2px solid #8b7cff; padding-left: 4px; margin-left: -6px; }
+  .h1 { font-size: 11px; font-weight: 700; color: #fff; margin-bottom: 3px; line-height: 1.3; }
+  .h2 { font-size: 10px; font-weight: 600; color: #c8beff; margin: 6px 0 3px; }
+  .summary-blocks { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 4px 0 6px; font-size: 8.5px; }
+  .summary-blocks .sb { background: rgba(255,255,255,.03); border-radius: 3px; padding: 3px 5px; }
+  .summary-blocks .sb .sk { font-size: 7.5px; opacity: .55; text-transform: uppercase; }
+
+  /* File table */
+  .ftable { border: 1px solid rgba(255,255,255,.06); border-radius: 4px; font-size: 8.5px; margin: 4px 0 6px; }
+  .ftable .row { display: grid; grid-template-columns: 50px 1fr; padding: 2px 5px; border-bottom: 1px solid rgba(255,255,255,.04); }
+  .ftable .row:last-child { border: 0; }
+  .ftable .row .a { font-weight: 700; }
+  .ftable .row .a.create { color: #6cd49d; }
+  .ftable .row .a.modify { color: #e8c97c; }
+  .ftable .row .p { opacity: .85; font-size: 8.5px; }
+
+  /* A: cards */
+  .task-card { border: 1px solid rgba(255,255,255,.07); border-radius: 4px; margin-bottom: 4px; }
+  .task-card .tch { display: flex; gap: 6px; align-items: center; padding: 4px 6px; background: rgba(255,255,255,.02); font-size: 9px; }
+  .task-card .tch .ck { width: 10px; height: 10px; border: 1px solid #888; border-radius: 2px; }
+  .task-card .tch .ck.done { background: #6cd49d; border-color: #6cd49d; }
+  .task-card .tch .ck.partial { background: linear-gradient(90deg, #6cd49d 0%, #6cd49d 50%, transparent 50%); }
+  .task-card .tch .ck.empty { }
+  .task-card .tch .t-name { flex: 1; }
+  .task-card .tch .t-prog { font-size: 8px; opacity: .6; font-family: ui-monospace, monospace; }
+  .task-card .tch .t-bar { width: 40px; height: 3px; background: rgba(255,255,255,.06); border-radius: 2px; overflow: hidden; }
+  .task-card .tch .t-bar .f { height: 100%; background: #6cd49d; }
+  .task-card .steps { padding: 4px 10px; background: rgba(0,0,0,.2); font-size: 8.5px; }
+  .step { padding: 1px 0; opacity: .85; }
+  .step .ck-mini { display: inline-block; width: 8px; height: 8px; border: 1px solid #888; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+  .step.done .ck-mini { background: #6cd49d; border-color: #6cd49d; }
+  .step.done { color: #6cd49d; text-decoration: line-through; opacity: .6; }
+
+  /* B: flat list */
+  .flat-task { padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
+  .flat-task .h { display: flex; gap: 6px; align-items: center; font-size: 9.5px; font-weight: 600; }
+  .flat-task .h .badge-prog { background: rgba(108,212,157,.15); color: #6cd49d; padding: 1px 5px; border-radius: 8px; font-size: 8px; font-weight: 700; }
+  .flat-task .h .badge-prog.partial { background: rgba(232,201,124,.15); color: #e8c97c; }
+  .flat-task .h .badge-prog.todo { background: rgba(255,255,255,.06); color: #aaa; }
+  .flat-task .steps-inline { padding: 2px 0 2px 14px; font-size: 8.5px; opacity: .85; }
+  .flat-task .steps-inline .step { padding: 1px 0; }
+
+  .pros-mini { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; }
+  .pros-mini .p { color: #6cd49d; }
+  .pros-mini .c { color: #e89c8a; }
+  .reading-feel { font-size: 11px; font-style: italic; opacity: .7; }
+</style>
+
+<div class="pl-grid">
+
+  <!-- Option A: Collapsible task cards with progress bars -->
+  <div class="layout option" data-choice="cards" onclick="toggleSelect(this)">
+    <div class="head"><div class="letter">A</div><div><h3>Collapsible task cards <span style="font-size:10px;color:#8b7cff">(Recommended)</span></h3><div class="sub">Per-task progress bar + expand for steps</div></div></div>
+
+    <div class="mock">
+      <div class="topbar"><span>aiden_agent</span><span>/</span><span>plans</span><span>/</span><span>2026-05-24 Phase 9a Gateway Interceptor</span></div>
+      <div class="status-strip">
+        <span class="badge-phase">PHASE 9a</span>
+        <span class="badge-active">Active</span>
+        <div class="kv"><span class="k">Progress</span><div style="display:flex;gap:5px;align-items:center"><div class="progress-bar"><div class="fill"></div></div><span class="v">14 / 33 steps</span></div></div>
+        <div class="kv"><span class="k">Tasks</span><span class="v">2 / 7 done</span></div>
+        <div class="kv"><span class="k">Updated</span><span class="v">2 days ago</span></div>
+      </div>
+      <div class="body">
+        <div class="col-left">
+          <div class="label-mini">Tasks</div>
+          <div class="toc-item done"><span>Task 1 — Interceptor handler</span><span>10/10</span></div>
+          <div class="toc-item done"><span>Task 2 — ToolsStack construct</span><span>4/4</span></div>
+          <div class="toc-item active"><span>Task 3 — API Key Provider</span><span>0/3</span></div>
+          <div class="toc-item"><span>Task 4 — Inbound auth flip</span><span>0/5</span></div>
+          <div class="toc-item"><span>Task 5 — Target wiring</span><span>0/3</span></div>
+          <div class="toc-item"><span>Task 6 — Agent gateway.py</span><span>0/4</span></div>
+          <div class="toc-item"><span>Task 7 — Deploy + smoke</span><span>0/4</span></div>
+          <div class="label-mini" style="margin-top:8px">Related</div>
+          <div class="toc-item">ADR-010 (this plan's ADR)</div>
+        </div>
+        <div class="col-main">
+          <div class="h1">Phase 9a — Gateway Interceptor + list_my_properties POC</div>
+          <div class="summary-blocks">
+            <div class="sb"><div class="sk">Goal</div>Make list_my_properties reachable end-to-end via Gateway against staging.</div>
+            <div class="sb"><div class="sk">Stack</div>CDK Python 2.250, py 3.11 lambda, pytest/ruff/mypy.</div>
+          </div>
+          <div class="h2">File structure</div>
+          <div class="ftable">
+            <div class="row"><span class="a create">Create</span><span class="p">lambda/gateway_interceptor/src/handler.py</span></div>
+            <div class="row"><span class="a create">Create</span><span class="p">lambda/gateway_interceptor/tests/test_handler.py</span></div>
+            <div class="row"><span class="a modify">Modify</span><span class="p">infra/stacks/gateway_stack.py</span></div>
+            <div class="row" style="opacity:.55"><span class="a">…</span><span class="p">+ 8 more</span></div>
+          </div>
+          <div class="h2">Tasks</div>
+          <div class="task-card">
+            <div class="tch"><div class="ck done"></div><div class="t-name">Task 1 — Interceptor handler + tests</div><div class="t-bar"><div class="f" style="width:100%"></div></div><div class="t-prog">10/10</div></div>
+          </div>
+          <div class="task-card">
+            <div class="tch"><div class="ck done"></div><div class="t-name">Task 2 — ToolsStack construct</div><div class="t-bar"><div class="f" style="width:100%"></div></div><div class="t-prog">4/4</div></div>
+          </div>
+          <div class="task-card">
+            <div class="tch"><div class="ck empty"></div><div class="t-name">Task 3 — API Key Provider</div><div class="t-bar"><div class="f" style="width:0%"></div></div><div class="t-prog">0/3</div></div>
+            <div class="steps">
+              <div class="step"><span class="ck-mini"></span>Provision dummy CfnApiKeyCredentialProvider</div>
+              <div class="step"><span class="ck-mini"></span>Synth test: provider exists</div>
+              <div class="step"><span class="ck-mini"></span>Wire to OpenAPI target</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pros-mini">
+      <div class="p">+ At-a-glance: which task you're on, per-task progress bar</div>
+      <div class="p">+ Collapse done tasks, expand active — reduce noise</div>
+      <div class="p">+ TOC shows X/Y count per task, sticky on scroll</div>
+      <div class="c">- More UI chrome — slightly less raw markdown feel</div>
+    </div>
+    <div class="reading-feel">Reads like a project tracker. Best when actively executing the plan.</div>
+  </div>
+
+  <!-- Option B: Flat checklist with status badges -->
+  <div class="layout option" data-choice="flat" onclick="toggleSelect(this)">
+    <div class="head"><div class="letter">B</div><div><h3>Flat checklist <span style="font-size:10px;opacity:.7">(closer to raw MD)</span></h3><div class="sub">All steps visible inline + status pills</div></div></div>
+
+    <div class="mock">
+      <div class="topbar"><span>aiden_agent</span><span>/</span><span>plans</span><span>/</span><span>2026-05-24 Phase 9a Gateway Interceptor</span></div>
+      <div class="status-strip">
+        <span class="badge-phase">PHASE 9a</span>
+        <span class="badge-active">Active</span>
+        <div class="kv"><span class="k">Progress</span><div style="display:flex;gap:5px;align-items:center"><div class="progress-bar"><div class="fill"></div></div><span class="v">14 / 33</span></div></div>
+      </div>
+      <div class="body">
+        <div class="col-left">
+          <div class="label-mini">On this plan</div>
+          <div class="toc-item">Goal / Architecture</div>
+          <div class="toc-item">File structure</div>
+          <div class="toc-item">Tasks</div>
+          <div class="toc-item">Summary</div>
+          <div class="toc-item">Test plan</div>
+          <div class="toc-item">Self-review checklist</div>
+          <div class="label-mini" style="margin-top:8px">Related</div>
+          <div class="toc-item">ADR-010</div>
+        </div>
+        <div class="col-main">
+          <div class="h1">Phase 9a — Gateway Interceptor POC</div>
+          <div class="h2">File structure</div>
+          <div class="ftable">
+            <div class="row"><span class="a create">Create</span><span class="p">lambda/gateway_interceptor/src/handler.py</span></div>
+            <div class="row"><span class="a modify">Modify</span><span class="p">infra/stacks/gateway_stack.py</span></div>
+            <div class="row" style="opacity:.55"><span class="a">…</span><span class="p">+ 9 more</span></div>
+          </div>
+          <div class="h2">Tasks</div>
+          <div class="flat-task">
+            <div class="h">Task 1 — Interceptor handler <span class="badge-prog">10/10 done</span></div>
+            <div class="steps-inline">
+              <div class="step done"><span class="ck-mini"></span>Scaffold directory structure</div>
+              <div class="step done"><span class="ck-mini"></span>Write requirements.txt</div>
+              <div class="step done"><span class="ck-mini"></span>Write pyproject.toml</div>
+              <div class="step" style="opacity:.4">… (7 more, all done)</div>
+            </div>
+          </div>
+          <div class="flat-task">
+            <div class="h">Task 3 — API Key Provider <span class="badge-prog todo">0/3</span></div>
+            <div class="steps-inline">
+              <div class="step"><span class="ck-mini"></span>Provision dummy provider</div>
+              <div class="step"><span class="ck-mini"></span>Synth test</div>
+              <div class="step"><span class="ck-mini"></span>Wire to target</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pros-mini">
+      <div class="p">+ Closer to "open MD in a nice viewer" — minimal chrome</div>
+      <div class="p">+ Everything visible at once, easy to scan</div>
+      <div class="c">- Long plans (30+ steps) get scroll-heavy</div>
+      <div class="c">- No per-task progress bar — just pills</div>
+    </div>
+    <div class="reading-feel">Reads like prettified MD with status sprinkled in. Best when reviewing.</div>
+  </div>
+
+</div>
+
+<div class="section" style="margin-top: 18px; font-size: 13px; opacity: .85;">
+  <strong>Both share:</strong> phase badge, computed Active/Done state, progress bar driven by parsing <code>- [ ]</code> vs <code>- [x]</code> in the MD, file-structure table, TOC of tasks in left rail. Single source of truth stays the MD.
+</div>
+
+<div class="section" style="margin-top: 8px; font-size: 12px; opacity: .65;">
+  Click A or B. In terminal, mention any extra status fields you want — e.g. "show last commit touching files in this plan", "show blocked-by chip if any tasks reference another plan".
+</div>

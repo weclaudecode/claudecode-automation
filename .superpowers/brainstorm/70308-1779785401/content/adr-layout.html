@@ -1,0 +1,175 @@
+<h2>Question 4 — ADR detail page layout</h2>
+<p class="subtitle">Three visual layouts for opening an ADR. All render the same MD; differ in where TOC, status, and relations live. Pick the one that reads easiest at a glance.</p>
+
+<style>
+  .adr-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-top: 12px; }
+  .layout { border: 1.5px solid rgba(255,255,255,.08); border-radius: 10px; padding: 12px; cursor: pointer; transition: all .15s ease; display: flex; flex-direction: column; gap: 10px; }
+  .layout:hover { border-color: #8b7cff; transform: translateY(-2px); box-shadow: 0 8px 20px rgba(139,124,255,.12); }
+  .layout .head { display: flex; gap: 10px; align-items: center; }
+  .layout .letter { width: 26px; height: 26px; border-radius: 50%; background: #8b7cff; color: white; font-weight: 700; display: flex; align-items: center; justify-content: center; font-size: 13px; }
+  .layout h3 { margin: 0; font-size: 15px; }
+  .layout .sub { font-size: 11px; opacity: .65; }
+  .mock { background: #16161a; border: 1px solid rgba(255,255,255,.08); border-radius: 6px; padding: 0; overflow: hidden; font-family: ui-monospace, SF Mono, Menlo, monospace; font-size: 9.5px; line-height: 1.45; min-height: 280px; display: flex; flex-direction: column; }
+  .mock .topbar { background: #0f0f12; padding: 5px 8px; border-bottom: 1px solid rgba(255,255,255,.06); font-size: 9px; opacity: .55; display: flex; gap: 10px; }
+  .mock .body { flex: 1; display: flex; }
+  .col { padding: 8px; }
+  .col-left { width: 26%; border-right: 1px solid rgba(255,255,255,.05); background: rgba(255,255,255,.015); }
+  .col-right { width: 24%; border-left: 1px solid rgba(255,255,255,.05); background: rgba(255,255,255,.015); }
+  .col-main { flex: 1; padding: 8px 10px; }
+  .label-mini { font-size: 8px; text-transform: uppercase; letter-spacing: .08em; opacity: .5; margin-bottom: 4px; }
+  .toc-item { font-size: 9px; padding: 2px 0; opacity: .75; }
+  .toc-item.active { color: #c8beff; opacity: 1; border-left: 2px solid #8b7cff; padding-left: 4px; margin-left: -6px; }
+  .h1 { font-size: 11px; font-weight: 700; color: #fff; margin-bottom: 3px; line-height: 1.3; }
+  .h2 { font-size: 10px; font-weight: 600; color: #c8beff; margin: 6px 0 3px; }
+  .p-line { background: rgba(255,255,255,.07); height: 4px; border-radius: 2px; margin-bottom: 3px; }
+  .p-line.s { width: 70%; }
+  .p-line.m { width: 90%; }
+  .p-line.l { width: 100%; }
+  .codeblock { background: rgba(139,124,255,.08); border-left: 2px solid #8b7cff; padding: 4px 6px; margin: 4px 0; font-size: 8.5px; opacity: .8; }
+  .badge-status { display: inline-block; padding: 1px 6px; background: #6cd49d; color: #111; border-radius: 3px; font-size: 8.5px; font-weight: 700; letter-spacing: .04em; }
+  .badge-status.sup { background: #e89c8a; }
+  .relation { font-size: 8.5px; padding: 2px 0; opacity: .8; }
+  .chip-inline { display: inline-block; background: rgba(139,124,255,.18); color: #c8beff; padding: 1px 5px; border-radius: 8px; font-size: 8px; margin-right: 3px; }
+  .pros-mini { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; }
+  .pros-mini .p { color: #6cd49d; }
+  .pros-mini .c { color: #e89c8a; }
+  .reading-feel { font-size: 11px; font-style: italic; opacity: .7; }
+</style>
+
+<div class="adr-grid">
+
+  <!-- Layout A: 3-pane (TOC | content | relations) -->
+  <div class="layout option" data-choice="three-pane" onclick="toggleSelect(this)">
+    <div class="head"><div class="letter">A</div><div><h3>Three-pane <span style="font-size:10px;color:#8b7cff">(reference-style)</span></h3><div class="sub">TOC + content + relations rail</div></div></div>
+
+    <div class="mock">
+      <div class="topbar"><span>aiden_agent</span><span>/</span><span>ADR-008</span></div>
+      <div class="body">
+        <div class="col col-left">
+          <div class="label-mini">On this page</div>
+          <div class="toc-item active">Status</div>
+          <div class="toc-item">Context</div>
+          <div class="toc-item">Decision</div>
+          <div class="toc-item">Consequences</div>
+          <div class="toc-item">Resolutions</div>
+        </div>
+        <div class="col col-main">
+          <div class="h1">ADR-008: Clerk JWT via JWKS</div>
+          <div class="badge-status">Accepted</div>
+          <div class="h2">Context</div>
+          <div class="p-line l"></div><div class="p-line m"></div><div class="p-line s"></div>
+          <div class="codeblock">UNAUTHORIZED_LEGACY_JWT</div>
+          <div class="h2">Decision</div>
+          <div class="p-line l"></div><div class="p-line l"></div>
+        </div>
+        <div class="col col-right">
+          <div class="label-mini">Status</div>
+          <div class="relation"><span class="badge-status">Accepted</span></div>
+          <div class="relation" style="opacity:.6">2026-05-22</div>
+          <div class="label-mini" style="margin-top:8px">Supersedes</div>
+          <div class="relation">ADR-002 §JWT</div>
+          <div class="relation">ADR-004 §JWT</div>
+          <div class="label-mini" style="margin-top:8px">Resolves</div>
+          <div class="relation">OQ#1 Clerk JWT</div>
+          <div class="label-mini" style="margin-top:8px">Tags</div>
+          <div class="relation"><span class="chip-inline">auth</span><span class="chip-inline">clerk</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pros-mini">
+      <div class="p">+ All metadata visible without scrolling</div>
+      <div class="p">+ TOC always present — fast jumps in long ADRs</div>
+      <div class="c">- Three columns crowd on narrow windows</div>
+    </div>
+    <div class="reading-feel">Reads like AWS / Stripe docs. Maximum signal density.</div>
+  </div>
+
+  <!-- Layout B: Centered single column + top banner -->
+  <div class="layout option" data-choice="centered" onclick="toggleSelect(this)">
+    <div class="head"><div class="letter">B</div><div><h3>Centered column <span style="font-size:10px;color:#8b7cff">(Recommended — reading-first)</span></h3><div class="sub">Status banner + single column</div></div></div>
+
+    <div class="mock">
+      <div class="topbar"><span>aiden_agent</span><span>/</span><span>ADR-008</span></div>
+      <div class="body" style="flex-direction:column;align-items:center">
+        <div style="width:100%;padding:8px 10px;background:rgba(108,212,157,.08);border-bottom:1px solid rgba(108,212,157,.2);font-size:9px;display:flex;gap:8px;align-items:center">
+          <span class="badge-status">Accepted</span>
+          <span style="opacity:.65">2026-05-22</span>
+          <span style="opacity:.4">|</span>
+          <span style="opacity:.65">Supersedes <span class="chip-inline">ADR-002</span><span class="chip-inline">ADR-004</span></span>
+        </div>
+        <div style="width:78%;padding:10px 0">
+          <div class="h1">ADR-008: Clerk JWT via JWKS</div>
+          <div style="opacity:.55;font-size:9px;margin-bottom:6px">Resolves OQ#1 (Clerk JWT format)</div>
+          <div class="h2">Context</div>
+          <div class="p-line l"></div><div class="p-line l"></div><div class="p-line m"></div>
+          <div class="codeblock">UNAUTHORIZED_LEGACY_JWT</div>
+          <div class="h2">Decision</div>
+          <div class="p-line l"></div><div class="p-line l"></div><div class="p-line s"></div>
+          <div class="h2">Consequences</div>
+          <div class="p-line l"></div><div class="p-line m"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pros-mini">
+      <div class="p">+ Optimal line length for reading (~70ch)</div>
+      <div class="p">+ Status + relations always in eye-line at top</div>
+      <div class="p">+ Works on narrow windows / split-screen</div>
+      <div class="c">- No persistent TOC (use floating scroll-spy instead)</div>
+    </div>
+    <div class="reading-feel">Reads like Notion / Linear. Reading comfort first.</div>
+  </div>
+
+  <!-- Layout C: Two-pane (relations rail + content with inline TOC) -->
+  <div class="layout option" data-choice="two-pane" onclick="toggleSelect(this)">
+    <div class="head"><div class="letter">C</div><div><h3>Two-pane <span style="font-size:10px;color:#8b7cff">(relations-led)</span></h3><div class="sub">Metadata rail + content</div></div></div>
+
+    <div class="mock">
+      <div class="topbar"><span>aiden_agent</span><span>/</span><span>ADR-008</span></div>
+      <div class="body">
+        <div class="col col-left" style="width:30%">
+          <div class="label-mini">Status</div>
+          <div class="relation"><span class="badge-status">Accepted</span></div>
+          <div class="relation" style="opacity:.6">2026-05-22</div>
+          <div class="label-mini" style="margin-top:8px">Supersedes</div>
+          <div class="relation">ADR-002 §JWT</div>
+          <div class="relation">ADR-004 §JWT</div>
+          <div class="label-mini" style="margin-top:8px">On this page</div>
+          <div class="toc-item active">Status</div>
+          <div class="toc-item">Context</div>
+          <div class="toc-item">Decision</div>
+          <div class="toc-item">Consequences</div>
+          <div class="label-mini" style="margin-top:8px">Tags</div>
+          <div class="relation"><span class="chip-inline">auth</span><span class="chip-inline">clerk</span></div>
+        </div>
+        <div class="col col-main">
+          <div class="h1">ADR-008: Clerk JWT via JWKS</div>
+          <div class="h2">Context</div>
+          <div class="p-line l"></div><div class="p-line l"></div><div class="p-line m"></div>
+          <div class="codeblock">UNAUTHORIZED_LEGACY_JWT</div>
+          <div class="h2">Decision</div>
+          <div class="p-line l"></div><div class="p-line l"></div><div class="p-line l"></div>
+          <div class="h2">Consequences</div>
+          <div class="p-line l"></div><div class="p-line m"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pros-mini">
+      <div class="p">+ Compromise: relations always visible, more content width than A</div>
+      <div class="p">+ Single TOC + metadata column (no third rail)</div>
+      <div class="c">- Left rail dominates eye on first read</div>
+    </div>
+    <div class="reading-feel">Reads like Docusaurus / GitHub Wiki sidebar.</div>
+  </div>
+
+</div>
+
+<div class="section" style="margin-top: 18px; font-size: 13px; opacity: .85;">
+  <strong>Click A / B / C.</strong> I lean <strong>B</strong> for ADRs specifically — they're narrative documents you read top-to-bottom. The TOC matters less when content is well-sectioned and you mostly read the whole thing.
+</div>
+
+<div class="section" style="margin-top: 8px; font-size: 12px; opacity: .65;">
+  Add nuance in terminal — e.g. "B but I want a floating TOC button", or "A — I jump around long ADRs constantly".
+</div>

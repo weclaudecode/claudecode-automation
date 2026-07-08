@@ -1,0 +1,123 @@
+<h2>Question 2 — How does HTML get its content?</h2>
+<p class="subtitle">You said it yourself: <em>"we can use the same content to reduce duplication"</em>. This is the core trade-off — drift risk vs build complexity vs how fast HTML reflects what Claude just wrote to the MD.</p>
+
+<style>
+  .gm-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-top: 12px; }
+  .gm { border: 1px solid var(--border, #2a2a2a); border-radius: 10px; padding: 14px; cursor: pointer; transition: all .15s ease; display: flex; flex-direction: column; gap: 10px; }
+  .gm:hover { border-color: #8b7cff; transform: translateY(-2px); box-shadow: 0 8px 20px rgba(139,124,255,.12); }
+  .gm .letter { width: 28px; height: 28px; border-radius: 50%; background: #8b7cff; color: white; font-weight: 700; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+  .gm h3 { margin: 0; font-size: 16px; }
+  .gm .tag { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; opacity: .65; }
+  .flow { font-family: ui-monospace, SF Mono, Menlo, monospace; font-size: 11.5px; line-height: 1.55; background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.06); border-radius: 6px; padding: 10px; }
+  .flow .step { display: flex; gap: 8px; align-items: flex-start; padding: 2px 0; }
+  .flow .step .n { background: #8b7cff; color: white; border-radius: 50%; min-width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; flex-shrink: 0; margin-top: 2px; }
+  .flow .arrow { opacity: .35; text-align: center; padding: 1px 0; }
+  .stat-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; font-size: 12px; padding: 3px 0; border-bottom: 1px dashed rgba(255,255,255,.08); }
+  .stat-row:last-child { border: 0; }
+  .stat-row .v { font-family: ui-monospace, monospace; opacity: .85; }
+  .stat-row .v.good { color: #6cd49d; }
+  .stat-row .v.bad { color: #e89c8a; }
+  .stat-row .v.warn { color: #e8c97c; }
+  .pros-mini { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+  .pros-mini .p { color: #6cd49d; }
+  .pros-mini .c { color: #e89c8a; }
+  .verdict { font-size: 11.5px; font-style: italic; opacity: .75; border-left: 2px solid rgba(139,124,255,.4); padding-left: 8px; }
+</style>
+
+<div class="gm-grid">
+
+  <!-- A: Dual-write -->
+  <div class="gm option" data-choice="a" onclick="toggleSelect(this)">
+    <div style="display:flex;gap:10px;align-items:center"><div class="letter">A</div><div><h3>Dual-write</h3><div class="tag">Claude writes both MD + HTML</div></div></div>
+
+    <div class="flow">
+      <div class="step"><div class="n">1</div><div>Claude edits <code>ADR-008.md</code></div></div>
+      <div class="arrow">↓</div>
+      <div class="step"><div class="n">2</div><div>Claude <strong>also</strong> updates <code>ADR-008.html</code></div></div>
+      <div class="arrow">↓</div>
+      <div class="step"><div class="n">3</div><div>You open the HTML</div></div>
+    </div>
+
+    <div>
+      <div class="stat-row"><span>HTML reflects MD?</span><span class="v warn">If Claude remembers</span></div>
+      <div class="stat-row"><span>Drift risk?</span><span class="v bad">High</span></div>
+      <div class="stat-row"><span>Build step?</span><span class="v good">None</span></div>
+      <div class="stat-row"><span>Token cost / edit?</span><span class="v bad">2× content</span></div>
+    </div>
+
+    <div class="pros-mini">
+      <div class="p">+ Each artifact is fully self-contained HTML</div>
+      <div class="c">− Every MD edit means re-writing HTML too</div>
+      <div class="c">− Search/filter requires N HTML files to know about each other</div>
+    </div>
+
+    <div class="verdict">"Skill" feel — but Claude becomes the build system.</div>
+  </div>
+
+  <!-- B: Runtime loader -->
+  <div class="gm option" data-choice="b" onclick="toggleSelect(this)">
+    <div style="display:flex;gap:10px;align-items:center"><div class="letter">B</div><div><h3>Live render <span style="font-size:10px;color:#8b7cff">(Recommended)</span></h3><div class="tag">HTML template loads MD at runtime</div></div></div>
+
+    <div class="flow">
+      <div class="step"><div class="n">1</div><div>Claude edits <code>ADR-008.md</code> — that's it</div></div>
+      <div class="arrow">↓</div>
+      <div class="step"><div class="n">2</div><div>You run <code>docs serve</code> (or it's already running)</div></div>
+      <div class="arrow">↓</div>
+      <div class="step"><div class="n">3</div><div>Viewer <code>fetch('ADR-008.md')</code> → renders</div></div>
+    </div>
+
+    <div>
+      <div class="stat-row"><span>HTML reflects MD?</span><span class="v good">Instantly on refresh</span></div>
+      <div class="stat-row"><span>Drift risk?</span><span class="v good">Zero (single source)</span></div>
+      <div class="stat-row"><span>Build step?</span><span class="v good">None — server scans live</span></div>
+      <div class="stat-row"><span>Token cost / edit?</span><span class="v good">1× (MD only)</span></div>
+    </div>
+
+    <div class="pros-mini">
+      <div class="p">+ Single source of truth — MD is canonical</div>
+      <div class="p">+ Search/filter via tiny <code>/api/index</code> the server builds live</div>
+      <div class="p">+ Skill stays focused on writing MD well</div>
+      <div class="c">− Needs <code>docs serve</code> running (one command)</div>
+    </div>
+
+    <div class="verdict">"Automated flow" feel — template loads content. No drift, ever.</div>
+  </div>
+
+  <!-- C: SSG build -->
+  <div class="gm option" data-choice="c" onclick="toggleSelect(this)">
+    <div style="display:flex;gap:10px;align-items:center"><div class="letter">C</div><div><h3>Static site build</h3><div class="tag">mkdocs/eleventy-style</div></div></div>
+
+    <div class="flow">
+      <div class="step"><div class="n">1</div><div>Claude edits <code>ADR-008.md</code></div></div>
+      <div class="arrow">↓</div>
+      <div class="step"><div class="n">2</div><div>Claude runs <code>docs build</code> (post-edit hook)</div></div>
+      <div class="arrow">↓</div>
+      <div class="step"><div class="n">3</div><div>Pre-rendered <code>ADR-008.html</code> drops into <code>_viewer/</code></div></div>
+    </div>
+
+    <div>
+      <div class="stat-row"><span>HTML reflects MD?</span><span class="v warn">After build (~1-3s)</span></div>
+      <div class="stat-row"><span>Drift risk?</span><span class="v warn">If build skipped</span></div>
+      <div class="stat-row"><span>Build step?</span><span class="v bad">Required, every edit</span></div>
+      <div class="stat-row"><span>Token cost / edit?</span><span class="v good">1× (just MD)</span></div>
+    </div>
+
+    <div class="pros-mini">
+      <div class="p">+ Pure static — no server needed, deploys anywhere</div>
+      <div class="p">+ Mature ecosystem (mkdocs-material is excellent)</div>
+      <div class="c">− Build must run after every Claude edit (hook needed)</div>
+      <div class="c">− Less interactive (search is pre-indexed lunr/typesense)</div>
+    </div>
+
+    <div class="verdict">Industry-standard but optimised for "publish docs to web", not "private dev tool".</div>
+  </div>
+
+</div>
+
+<div class="section" style="margin-top: 18px; font-size: 13px; opacity: .85;">
+  <strong>The recommendation is B</strong> because you said <em>"reduce duplication"</em> — the only model where MD is genuinely the single source of truth. <strong>C</strong> is reasonable if you'd rather avoid running a local server. <strong>A</strong> is the option I'd actively talk you out of — it puts Claude in the build-system loop forever.
+</div>
+
+<div class="section" style="margin-top: 10px; font-size: 12px; opacity: .65;">
+  Click A / B / C. Add nuance in terminal — e.g. "B but with <code>file://</code> support too", or "C — I don't want to run a server".
+</div>

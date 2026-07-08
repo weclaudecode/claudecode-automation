@@ -1,0 +1,235 @@
+<h2>Crystal palette v2 — darker base</h2>
+<p class="subtitle">Same accents (purple / emerald / coral / amber), background pulled down to near-black with a single restrained purple glow. Sharper contrast, accents punch harder.</p>
+
+<style>
+  :root {
+    /* DARKER base */
+    --bg-0: #030410;
+    --bg-1: #06081a;
+    --bg-2: #0a0e24;
+
+    --brand: #7c4dff;
+    --brand-soft: rgba(124,77,255,.18);
+    --brand-glow: rgba(124,77,255,.6);
+    --success: #34d399;
+    --success-soft: rgba(52,211,153,.16);
+    --success-glow: rgba(52,211,153,.5);
+    --alert: #ff5577;
+    --alert-soft: rgba(255,85,119,.16);
+    --alert-glow: rgba(255,85,119,.55);
+    --warn: #ffa500;
+    --warn-soft: rgba(255,165,0,.16);
+    --warn-glow: rgba(255,165,0,.5);
+    --text: rgba(255,255,255,.94);
+    --text-dim: rgba(255,255,255,.58);
+    --border: rgba(255,255,255,.08);
+  }
+
+  .crystal-shell {
+    background:
+      radial-gradient(circle at 30% 0%, rgba(124,77,255,.18), transparent 55%),
+      linear-gradient(180deg, var(--bg-0), var(--bg-1) 50%, var(--bg-2));
+    border-radius: 14px;
+    padding: 18px;
+    border: 1px solid rgba(124,77,255,.18);
+  }
+
+  .compare-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+  .sample { border-radius: 10px; padding: 16px; }
+  .sample .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: .1em; opacity: .55; color: white; margin-bottom: 6px; }
+
+  .sample.before {
+    background:
+      radial-gradient(circle at 50% 0%, rgba(124,77,255,.3), transparent 55%),
+      radial-gradient(circle at 100% 100%, rgba(255,165,0,.14), transparent 50%),
+      linear-gradient(135deg, #0c0f1a, #161b35 60%, #1f2a4e);
+  }
+  .sample.after {
+    background:
+      radial-gradient(circle at 30% 0%, rgba(124,77,255,.18), transparent 55%),
+      linear-gradient(180deg, #030410, #06081a 50%, #0a0e24);
+  }
+  .sample .swatch-row { display: flex; gap: 4px; }
+  .sample .swatch { width: 30px; height: 30px; border-radius: 5px; border: 1px solid rgba(255,255,255,.12); }
+
+  /* tokens */
+  .tokens { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 12px 0; }
+  .tok { background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.07); border-radius: 8px; padding: 8px; backdrop-filter: blur(10px); }
+  .tok .chip { width: 100%; height: 24px; border-radius: 5px; margin-bottom: 6px; }
+  .tok .name { font-size: 11px; color: var(--text); font-weight: 600; }
+  .tok .use { font-size: 9.5px; color: var(--text-dim); margin-top: 2px; line-height: 1.4; }
+
+  .glass {
+    background: rgba(255,255,255,.04);
+    backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 12px 40px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.06);
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+    font-size: 10px;
+    line-height: 1.5;
+    color: var(--text);
+  }
+  .glass .topbar { padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 9px; color: var(--text-dim); display: flex; gap: 6px; align-items: center; background: rgba(0,0,0,.25); }
+  .glass .body { padding: 10px 12px; }
+  .glass .h1 { font-size: 13px; font-weight: 700; color: white; margin-bottom: 8px; }
+  .glass .h2 { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); margin: 10px 0 5px; }
+
+  .strip { display: flex; gap: 6px; align-items: center; padding: 8px 10px; border-radius: 8px; background: rgba(0,0,0,.4); border: 1px solid var(--border); margin-bottom: 10px; }
+  .badge { padding: 2px 8px; border-radius: 4px; font-size: 9.5px; font-weight: 700; letter-spacing: .04em; }
+  .badge.phase { background: linear-gradient(135deg, var(--brand), #b388ff); color: white; box-shadow: 0 0 16px var(--brand-glow); }
+  .badge.active { background: var(--brand-soft); color: #c8b3ff; border: 1px solid var(--brand); }
+  .badge.done { background: var(--success-soft); color: #6ee7b7; border: 1px solid var(--success); }
+  .badge.blocked { background: var(--alert-soft); color: #ff8da6; border: 1px solid var(--alert); box-shadow: 0 0 14px var(--alert-glow); }
+  .badge.draft { background: var(--warn-soft); color: #ffd58a; border: 1px solid var(--warn); }
+  .progress { flex: 1; height: 5px; background: rgba(255,255,255,.06); border-radius: 3px; overflow: hidden; }
+  .progress .fill { height: 100%; }
+  .progress .fill.active { background: linear-gradient(90deg, var(--brand), var(--success)); box-shadow: 0 0 12px var(--brand-glow); }
+  .small { font-size: 9.5px; color: var(--text-dim); }
+
+  .task { background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; margin-bottom: 4px; display: flex; gap: 8px; align-items: center; }
+  .task.done { background: rgba(52,211,153,.06); border-color: rgba(52,211,153,.22); }
+  .task.blocked { background: rgba(255,85,119,.07); border-color: rgba(255,85,119,.28); }
+  .task .ck { width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--text-dim); display: flex; align-items: center; justify-content: center; flex-shrink: 0; position: relative; }
+  .task.done .ck { background: var(--success); border-color: var(--success); box-shadow: 0 0 10px var(--success-glow); }
+  .task.done .ck::after { content: ""; position: absolute; width: 6px; height: 3px; border-left: 1.5px solid #062; border-bottom: 1.5px solid #062; transform: rotate(-45deg); top: 3px; left: 2px; }
+  .task.blocked .ck { background: var(--alert); border-color: var(--alert); box-shadow: 0 0 10px var(--alert-glow); }
+  .task .name { flex: 1; color: var(--text); }
+  .task.done .name { color: #6ee7b7; }
+  .task.blocked .name { color: #ff8da6; }
+  .task .bar { width: 55px; height: 3px; background: rgba(255,255,255,.05); border-radius: 2px; overflow: hidden; }
+  .task .bar .f { height: 100%; }
+  .task.done .bar .f { background: var(--success); width: 100%; }
+  .task.blocked .bar .f { background: var(--alert); width: 30%; }
+  .task .progress-text { font-size: 9px; color: var(--text-dim); }
+
+  .adr-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--border); }
+  .adr-row:last-child { border: 0; }
+  .adr-row .num { font-weight: 700; color: #c8b3ff; font-size: 10.5px; }
+  .adr-row .title { flex: 1; color: var(--text); }
+
+  .find { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px dashed var(--border); font-size: 10px; }
+  .sev { padding: 1px 6px; border-radius: 3px; font-size: 8.5px; font-weight: 700; letter-spacing: .04em; }
+  .sev.high { background: var(--alert); color: white; box-shadow: 0 0 12px var(--alert-glow); }
+  .sev.med  { background: var(--warn); color: #2a1a00; }
+  .sev.low  { background: var(--brand-soft); color: #c8b3ff; }
+  .sev.fixed { background: var(--success); color: #062; }
+
+  .section-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; margin-top: 14px; }
+</style>
+
+<div class="compare-row">
+  <div class="sample before">
+    <div class="lbl">Before — v1</div>
+    <div class="swatch-row">
+      <div class="swatch" style="background:#0c0f1a"></div>
+      <div class="swatch" style="background:#161b35"></div>
+      <div class="swatch" style="background:#1f2a4e"></div>
+    </div>
+    <div style="font-size:10px;color:rgba(255,255,255,.6);margin-top:6px">Brighter indigo, twin radial gradients</div>
+  </div>
+  <div class="sample after">
+    <div class="lbl">After — v2 (darker)</div>
+    <div class="swatch-row">
+      <div class="swatch" style="background:#030410"></div>
+      <div class="swatch" style="background:#06081a"></div>
+      <div class="swatch" style="background:#0a0e24"></div>
+    </div>
+    <div style="font-size:10px;color:rgba(255,255,255,.85);margin-top:6px">Near-black indigo, single restrained purple glow</div>
+  </div>
+</div>
+
+<div class="crystal-shell">
+
+<div class="label-mini" style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;opacity:.7;margin-bottom:6px;color:white">Token palette (unchanged)</div>
+
+<div class="tokens">
+  <div class="tok">
+    <div class="chip" style="background:linear-gradient(135deg,#7c4dff,#b388ff);box-shadow:0 0 14px rgba(124,77,255,.55)"></div>
+    <div class="name">Brand purple</div>
+    <div class="use">primary, phase, active</div>
+  </div>
+  <div class="tok">
+    <div class="chip" style="background:#34d399;box-shadow:0 0 14px rgba(52,211,153,.5)"></div>
+    <div class="name">Emerald</div>
+    <div class="use">done / accepted / fixed</div>
+  </div>
+  <div class="tok">
+    <div class="chip" style="background:#ff5577;box-shadow:0 0 14px rgba(255,85,119,.55)"></div>
+    <div class="name">Coral red</div>
+    <div class="use">blocked / alert / high</div>
+  </div>
+  <div class="tok">
+    <div class="chip" style="background:#ffa500;box-shadow:0 0 14px rgba(255,165,0,.5)"></div>
+    <div class="name">Amber</div>
+    <div class="use">draft / proposed / medium</div>
+  </div>
+  <div class="tok">
+    <div class="chip" style="background:linear-gradient(180deg,#030410,#0a0e24)"></div>
+    <div class="name">Deep indigo</div>
+    <div class="use">backdrop (darker now)</div>
+  </div>
+</div>
+
+<div class="section-grid">
+
+  <div class="glass">
+    <div class="topbar"><span>aiden_agent</span><span style="opacity:.4">/</span><span>plans</span><span style="opacity:.4">/</span><span>Phase 9a Gateway Interceptor</span></div>
+    <div class="body">
+      <div class="h1">Phase 9a — Gateway Interceptor</div>
+      <div class="strip">
+        <span class="badge phase">PHASE 9a</span>
+        <span class="badge active">ACTIVE</span>
+        <div class="progress"><div class="fill active" style="width:42%"></div></div>
+        <span class="small">14 / 33 steps</span>
+      </div>
+
+      <div class="task done"><div class="ck"></div><div class="name">Task 1 — Interceptor handler + tests</div><div class="bar"><div class="f"></div></div><span class="progress-text">10/10</span></div>
+      <div class="task done"><div class="ck"></div><div class="name">Task 2 — ToolsStack construct</div><div class="bar"><div class="f"></div></div><span class="progress-text">4/4</span></div>
+      <div class="task blocked"><div class="ck"></div><div class="name">Task 3 — API Key Provider <span style="font-size:9px;opacity:.85">(waiting on ADR-010)</span></div><div class="bar"><div class="f"></div></div><span class="progress-text">0/3</span></div>
+      <div class="task"><div class="ck"></div><div class="name">Task 4 — Inbound auth flip</div><div class="bar"><div class="f"></div></div><span class="progress-text">0/5</span></div>
+      <div class="task"><div class="ck"></div><div class="name">Task 5 — Target wiring</div><div class="bar"><div class="f"></div></div><span class="progress-text">0/3</span></div>
+
+      <div class="h2">ADR index</div>
+      <div class="adr-row"><span class="num">ADR-008</span><span class="title">Clerk JWT via JWKS</span><span class="badge done">ACCEPTED</span></div>
+      <div class="adr-row"><span class="num">ADR-002</span><span class="title">Inline intercept state machine</span><span class="badge" style="background:rgba(255,255,255,.06);color:var(--text-dim);text-decoration:line-through;border:1px solid var(--border)">SUPERSEDED</span></div>
+      <div class="adr-row"><span class="num">ADR-010</span><span class="title">Gateway interceptor JWT passthrough</span><span class="badge draft">PROPOSED</span></div>
+    </div>
+  </div>
+
+  <div class="glass">
+    <div class="topbar"><span>data-entry-website</span><span style="opacity:.4">/</span><span>audits</span><span style="opacity:.4">/</span><span>2026-05-20</span></div>
+    <div class="body">
+      <div class="h1">Codebase Audit — 2026-05-20</div>
+      <div class="strip" style="margin-bottom:8px">
+        <span class="badge done">5 FIXED</span>
+        <span class="badge blocked">2 OPEN</span>
+        <span class="badge draft">3 INVESTIGATING</span>
+      </div>
+
+      <div class="h2">Severity</div>
+      <div class="find"><span class="sev high">HIGH</span><span style="flex:1">auth.md — Missing RLS on user_profiles</span><span class="small">open</span></div>
+      <div class="find"><span class="sev high">HIGH</span><span style="flex:1">financial.md — Plaintext API key</span><span class="badge done" style="font-size:9px">FIXED</span></div>
+      <div class="find"><span class="sev med">MED</span><span style="flex:1">db-schema.md — Index missing on hot path</span><span class="small">open</span></div>
+      <div class="find"><span class="sev med">MED</span><span style="flex:1">edge-functions.md — No retry on 5xx</span><span class="badge done" style="font-size:9px">FIXED</span></div>
+      <div class="find"><span class="sev low">LOW</span><span style="flex:1">dead-code.md — Unused exports (n=8)</span><span class="small">open</span></div>
+      <div class="find"><span class="sev fixed">DONE</span><span style="flex:1">auth.md — Session token rotation</span><span class="badge done" style="font-size:9px">FIXED</span></div>
+    </div>
+  </div>
+
+</div>
+
+</div>
+
+<div class="section" style="margin-top: 16px; font-size: 13px; opacity: .85;">
+  <strong>Changes:</strong> background dropped from <code>#0c0f1a → #030410</code> at top, removed the warm amber radial bottom-right, reduced the purple radial intensity. Glass panels now sit on a near-black field, so the accent glows do more work.
+</div>
+
+<div class="section" style="margin-top: 8px; font-size: 12px; opacity: .65;">
+  Say <strong>"locked in"</strong> to confirm, or tell me to go even darker / lighten slightly / drop the purple haze entirely.
+</div>
+
+<div class="options" style="display:none">
+  <div class="option" data-choice="locked-in-dark" onclick="toggleSelect(this)"></div>
+</div>

@@ -1,0 +1,230 @@
+<h2>Design summary — one page</h2>
+<p class="subtitle">Everything we've decided, plus 2 final clarifications. Read through, then answer the two open questions at the bottom and I'll write the spec.</p>
+
+<style>
+  :root {
+    --bg-0: #030410; --bg-1: #06081a; --bg-2: #0a0e24;
+    --brand: #7c4dff; --brand-soft: rgba(124,77,255,.18); --brand-glow: rgba(124,77,255,.55);
+    --success: #34d399; --success-soft: rgba(52,211,153,.16);
+    --alert: #ff5577; --alert-soft: rgba(255,85,119,.16);
+    --warn: #ffa500; --warn-soft: rgba(255,165,0,.16);
+    --text: rgba(255,255,255,.94); --text-dim: rgba(255,255,255,.6); --border: rgba(255,255,255,.08);
+  }
+  .shell { background: radial-gradient(circle at 30% 0%, rgba(124,77,255,.15), transparent 55%), linear-gradient(180deg, var(--bg-0), var(--bg-1) 50%, var(--bg-2)); border-radius: 14px; padding: 18px; border: 1px solid rgba(124,77,255,.18); }
+
+  .glass { background: rgba(255,255,255,.04); backdrop-filter: blur(20px) saturate(140%); border: 1px solid var(--border); border-radius: 10px; padding: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.06); color: var(--text); margin-bottom: 14px; }
+  .glass h3 { font-size: 13px; color: white; margin: 0 0 10px; font-weight: 700; letter-spacing: .02em; display: flex; gap: 8px; align-items: center; }
+  .glass h3 .tag { background: var(--brand-soft); color: #c8b3ff; border: 1px solid var(--brand); font-size: 9px; padding: 2px 7px; border-radius: 10px; letter-spacing: .08em; font-weight: 700; }
+
+  /* architecture diagram */
+  .arch { font-family: ui-monospace, SF Mono, Menlo, monospace; font-size: 11px; line-height: 1.55; color: var(--text); }
+  .arch .layer { background: rgba(0,0,0,.3); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 6px; }
+  .arch .layer .lh { font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); margin-bottom: 5px; }
+  .arch .layer.engine { border-color: var(--brand); background: rgba(124,77,255,.06); }
+  .arch .layer.engine .lh { color: #c8b3ff; }
+  .arch .arrow { text-align: center; color: var(--text-dim); padding: 2px 0; font-size: 11px; }
+  .arch .box-row { display: flex; gap: 6px; }
+  .arch .box-row .box { flex: 1; background: rgba(255,255,255,.04); border: 1px solid var(--border); border-radius: 5px; padding: 5px 7px; font-size: 10.5px; }
+  .arch .box-row .box.brand { border-color: var(--brand); background: rgba(124,77,255,.08); }
+  .arch .box-row .box.green { border-color: var(--success); background: rgba(52,211,153,.08); }
+
+  /* decisions table */
+  .decisions { display: grid; grid-template-columns: 180px 1fr; gap: 6px 14px; font-size: 12px; }
+  .decisions .k { color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: 4px 0; }
+  .decisions .v { color: white; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+  .decisions .v code { background: rgba(124,77,255,.12); padding: 1px 5px; border-radius: 3px; color: #c8b3ff; font-size: 11px; }
+
+  /* file tree */
+  .tree { font-family: ui-monospace, SF Mono, Menlo, monospace; font-size: 11px; line-height: 1.6; color: var(--text); background: rgba(0,0,0,.3); border: 1px solid var(--border); border-radius: 6px; padding: 10px; white-space: pre; overflow-x: auto; }
+  .tree .dim { opacity: .5; }
+  .tree .b { color: #c8b3ff; font-weight: 600; }
+  .tree .g { color: #6ee7b7; }
+
+  /* skill + flow */
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .twocol .pillar { background: rgba(255,255,255,.04); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .twocol .pillar .name { font-size: 12px; color: white; font-weight: 700; margin-bottom: 4px; display: flex; gap: 6px; align-items: center; }
+  .twocol .pillar .role { font-size: 9.5px; text-transform: uppercase; color: var(--text-dim); letter-spacing: .06em; }
+  .twocol .pillar .body { font-size: 11px; color: var(--text); line-height: 1.5; margin-top: 6px; }
+
+  /* question card */
+  .qcard { background: rgba(124,77,255,.08); border: 1.5px solid rgba(124,77,255,.4); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+  .qcard h4 { margin: 0 0 8px; color: white; font-size: 13px; }
+  .qcard .q-opts { display: grid; gap: 6px; }
+  .qcard .qopt { padding: 8px 10px; border-radius: 6px; background: rgba(255,255,255,.04); border: 1px solid var(--border); cursor: pointer; font-size: 11.5px; color: var(--text); display: flex; gap: 8px; align-items: flex-start; }
+  .qcard .qopt:hover { border-color: var(--brand); background: rgba(124,77,255,.08); }
+  .qcard .qopt .letter { background: var(--brand); color: white; width: 18px; height: 18px; border-radius: 50%; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+  .qcard .qopt .body { flex: 1; }
+  .qcard .qopt .lbl { font-weight: 600; color: white; }
+  .qcard .qopt .desc { color: var(--text-dim); font-size: 10.5px; margin-top: 2px; line-height: 1.45; }
+  .qcard .qopt.rec { border-color: rgba(52,211,153,.4); }
+  .qcard .qopt.rec .letter { background: var(--success); }
+  .qcard .qopt.rec .pill { background: var(--success-soft); color: #6ee7b7; border: 1px solid var(--success); padding: 0 6px; font-size: 9px; border-radius: 8px; font-weight: 700; letter-spacing: .04em; margin-left: 6px; }
+</style>
+
+<div class="shell">
+
+<!-- ARCHITECTURE -->
+<div class="glass">
+  <h3>Architecture <span class="tag">ONE ENGINE · TWO ENTRY POINTS</span></h3>
+
+  <div class="arch">
+    <div class="layer">
+      <div class="lh">Source of truth (per project)</div>
+      <div class="box-row">
+        <div class="box">aiden_agent/docs/*.md</div>
+        <div class="box">forge/docs/*.md</div>
+        <div class="box">data-entry/docs/*.md</div>
+        <div class="box">accounting/docs/*.md</div>
+      </div>
+    </div>
+
+    <div class="arrow">↓ Astro reads MD + frontmatter</div>
+
+    <div class="layer engine">
+      <div class="lh">dev-artifact-viewer (the engine)</div>
+      <div class="box-row">
+        <div class="box brand">Content collections<br><span class="dim" style="font-size:9.5px">typed schemas per type</span></div>
+        <div class="box brand">Layouts<br><span class="dim" style="font-size:9.5px">ADR / Plan / Review / Runbook / Spec / Other</span></div>
+        <div class="box brand">React islands<br><span class="dim" style="font-size:9.5px">search + filters (only on index pages)</span></div>
+        <div class="box brand">Build index<br><span class="dim" style="font-size:9.5px">JSON of all artifact metadata</span></div>
+      </div>
+    </div>
+
+    <div class="arrow">↓ Two entry points share the engine</div>
+
+    <div class="box-row" style="margin-top:6px">
+      <div class="box green" style="flex:1"><strong>Project mode</strong><br><span style="font-size:9.5px;color:rgba(255,255,255,.7)">Scans one repo's <code>docs/</code> · auto-filter <code>project:current</code></span></div>
+      <div class="box green" style="flex:1"><strong>Portal mode</strong><br><span style="font-size:9.5px;color:rgba(255,255,255,.7)">Scans <code>~/Documents/github/*/docs/</code> · cross-cutting search</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- LOCKED DECISIONS -->
+<div class="glass">
+  <h3>Decisions locked <span class="tag">8 / 10</span></h3>
+
+  <div class="decisions">
+    <div class="k">Topology</div><div class="v">Hybrid — per-project viewer + cross-project portal, same engine</div>
+    <div class="k">Generation</div><div class="v">Static build (Astro) — MD is source of truth, HTML is regenerated</div>
+    <div class="k">First-class types</div><div class="v">ADR · Plan · Review · Runbook · Spec · Other (fallback)</div>
+    <div class="k">ADR layout</div><div class="v">Two-pane — left rail (status + supersedes + TOC) · main column</div>
+    <div class="k">Plan layout</div><div class="v">Collapsible task cards · status strip (phase + active/blocked + progress) · file-impact table</div>
+    <div class="k">Palette</div><div class="v">Crystal (dark) — <code>purple</code> brand · <code>emerald</code> done · <code>coral</code> alert · <code>amber</code> draft</div>
+    <div class="k">Stack</div><div class="v">Astro 4 + React islands · TypeScript · plain CSS</div>
+    <div class="k">Index page</div><div class="v">Structured search · 4 filter dimensions · ⌘K palette · keyboard nav · project↔portal toggle</div>
+  </div>
+</div>
+
+<!-- SKILL + AUTO-FLOW -->
+<div class="glass">
+  <h3>"Skill or automated flow?" — both, complementary</h3>
+  <div style="font-size:11.5px;color:var(--text-dim);margin-bottom:10px">Originally you framed this as either/or. The architecture makes them complementary: the viewer renders any MD; a small skill teaches Claude to write MD that classifies correctly.</div>
+  <div class="twocol">
+    <div class="pillar">
+      <div class="name">dev-artifact-viewer <span class="role">AUTOMATED FLOW</span></div>
+      <div class="body">Astro site. Knows nothing about Claude. Reads MD + frontmatter, renders typed layouts, builds search index. Run via <code>docs serve</code> / <code>docs build</code>. Ships in the engine repo (next question).</div>
+    </div>
+    <div class="pillar">
+      <div class="name">dev-artifact-author <span class="role">SKILL</span></div>
+      <div class="body">Tiny skill that triggers when Claude is about to write an ADR / plan / review. Provides the frontmatter schema + section conventions for each type. Output: MD that the viewer renders perfectly. No HTML generation.</div>
+    </div>
+  </div>
+</div>
+
+<!-- FILE STRUCTURE PROPOSAL -->
+<div class="glass">
+  <h3>Proposed file structure (engine + per-project)</h3>
+  <div class="tree"><span class="b">~/Documents/github/dev-artifact-viewer/</span>      <span class="dim">← the engine (new repo OR in claudecode-automation)</span>
+<span class="dim">├── </span>src/
+<span class="dim">│   ├── </span>content/config.ts         <span class="dim">← Zod schemas: adr, plan, review, runbook, spec</span>
+<span class="dim">│   ├── </span>layouts/
+<span class="dim">│   │   ├── </span><span class="b">AdrLayout.astro</span>
+<span class="dim">│   │   ├── </span><span class="b">PlanLayout.astro</span>      <span class="dim">← parses - [ ] / - [x] for progress</span>
+<span class="dim">│   │   ├── </span><span class="b">ReviewLayout.astro</span>
+<span class="dim">│   │   ├── </span>RunbookLayout.astro
+<span class="dim">│   │   ├── </span>SpecLayout.astro
+<span class="dim">│   │   └── </span>FallbackLayout.astro
+<span class="dim">│   ├── </span>islands/
+<span class="dim">│   │   ├── </span><span class="g">SearchPalette.tsx</span>      <span class="dim">← ⌘K, structured query parser</span>
+<span class="dim">│   │   ├── </span><span class="g">FilterRail.tsx</span>          <span class="dim">← 4 filter dimensions, live counts</span>
+<span class="dim">│   │   └── </span><span class="g">ResultsList.tsx</span>
+<span class="dim">│   ├── </span>pages/
+<span class="dim">│   │   ├── </span>index.astro              <span class="dim">← the index/portal page</span>
+<span class="dim">│   │   └── </span>[...slug].astro          <span class="dim">← per-artifact detail (routes to layout by type)</span>
+<span class="dim">│   ├── </span>lib/
+<span class="dim">│   │   ├── </span>scan-projects.ts         <span class="dim">← in portal mode: walk ~/Documents/github/*/docs/</span>
+<span class="dim">│   │   ├── </span>parse-progress.ts        <span class="dim">← - [ ] / - [x] counter for plans</span>
+<span class="dim">│   │   └── </span>build-index.ts           <span class="dim">← emit search-index.json at build</span>
+<span class="dim">│   └── </span>styles/crystal.css         <span class="dim">← the palette + tokens</span>
+<span class="dim">├── </span><span class="b">bin/docs.js</span>                    <span class="dim">← CLI: docs serve / docs build [--project|--portal]</span>
+<span class="dim">├── </span>astro.config.mjs
+<span class="dim">└── </span>package.json
+
+<span class="b">~/Documents/github/aiden_agent/docs/</span>      <span class="dim">← per-project (no install needed)</span>
+<span class="dim">├── </span>ADR-008-clerk-jwks.md           <span class="dim">← frontmatter: type: adr, status: accepted, ...</span>
+<span class="dim">├── </span>plans/2026-05-24-phase-9a.md    <span class="dim">← frontmatter: type: plan, phase: 9a, ...</span>
+<span class="dim">└── </span>...                              <span class="dim">← just markdown; engine reads via --project flag</span></div>
+</div>
+
+<!-- OPEN QUESTION 1: WHERE DOES VIEWER LIVE -->
+<div class="qcard">
+  <h4>Open question 1 — Where does the engine codebase live?</h4>
+  <div class="q-opts">
+    <div class="qopt option rec" data-choice="loc-claudecode-automation" onclick="toggleSelect(this)">
+      <div class="letter">A</div>
+      <div class="body">
+        <div class="lbl">Inside <code>claudecode-automation/</code><span class="pill">RECOMMENDED</span></div>
+        <div class="desc">As a subdirectory: <code>claudecode-automation/dev-artifact-viewer/</code>. Lives with your other Claude Code tooling. No new repo. <code>docs</code> CLI installed locally from there.</div>
+      </div>
+    </div>
+    <div class="qopt option" data-choice="loc-new-repo" onclick="toggleSelect(this)">
+      <div class="letter">B</div>
+      <div class="body">
+        <div class="lbl">New dedicated repo</div>
+        <div class="desc"><code>~/Documents/github/dev-artifact-viewer/</code>. Cleaner separation, easier to share/open-source later, but one more repo to maintain.</div>
+      </div>
+    </div>
+    <div class="qopt option" data-choice="loc-npm-global" onclick="toggleSelect(this)">
+      <div class="letter">C</div>
+      <div class="body">
+        <div class="lbl">npm package, install globally</div>
+        <div class="desc">Publish (private) as <code>@you/dev-artifact-viewer</code>, <code>npm i -g</code>. Heaviest setup; only worth it if multiple machines.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- OPEN QUESTION 2: TYPE DETECTION -->
+<div class="qcard">
+  <h4>Open question 2 — How does the viewer decide an MD is an ADR vs a Plan vs ...?</h4>
+  <div class="q-opts">
+    <div class="qopt option rec" data-choice="td-frontmatter-auth" onclick="toggleSelect(this)">
+      <div class="letter">A</div>
+      <div class="body">
+        <div class="lbl">Frontmatter is authoritative · filename pattern is fallback<span class="pill">RECOMMENDED</span></div>
+        <div class="desc">If frontmatter has <code>type: adr</code>, use it. Otherwise infer from filename (<code>ADR-NNN-*.md</code> → adr, <code>plans/*.md</code> → plan, <code>audits/*.md</code> → review). Existing files work without modification; new files written by Claude will include frontmatter via the skill.</div>
+      </div>
+    </div>
+    <div class="qopt option" data-choice="td-frontmatter-only" onclick="toggleSelect(this)">
+      <div class="letter">B</div>
+      <div class="body">
+        <div class="lbl">Frontmatter required</div>
+        <div class="desc">Build fails if any MD doesn't declare <code>type:</code>. Stricter, but means migrating every existing file. Loud failures, no ambiguity.</div>
+      </div>
+    </div>
+    <div class="qopt option" data-choice="td-filename-only" onclick="toggleSelect(this)">
+      <div class="letter">C</div>
+      <div class="body">
+        <div class="lbl">Filename pattern only</div>
+        <div class="desc">No frontmatter dependency. Pattern <code>ADR-NNN-*</code>, <code>plans/*</code>, etc. Simpler but you can't override the type for outliers, and ADR status comes from parsing prose (fragile).</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:8px;padding:12px;color:var(--text);font-size:12px">
+  <strong style="color:#c8b3ff">After you answer the two questions above</strong>, I write the spec to <code>docs/superpowers/specs/2026-05-26-dev-artifact-viewer-design.md</code>, commit it, and ask you to review. After your review, the implementation plan gets written by a separate skill (writing-plans).
+</div>
+
+</div>

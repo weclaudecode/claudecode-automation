@@ -1,0 +1,117 @@
+<h2>Question 1 — Where does the viewer live?</h2>
+<p class="subtitle">You produce artifacts across many repos in <code>~/Documents/github/</code> (aiden_agent, forge, data-entry-website, accounting-agent, …). Each viewer topology trades cross-project search against project-locality.</p>
+
+<style>
+  .topo-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-top: 12px; }
+  .topo { border: 1px solid var(--border, #2a2a2a); border-radius: 10px; padding: 14px; cursor: pointer; transition: all .15s ease; display: flex; flex-direction: column; gap: 10px; }
+  .topo:hover { border-color: #8b7cff; transform: translateY(-2px); box-shadow: 0 8px 20px rgba(139,124,255,.12); }
+  .topo .letter { width: 28px; height: 28px; border-radius: 50%; background: #8b7cff; color: white; font-weight: 700; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+  .topo h3 { margin: 0; font-size: 16px; }
+  .topo .tag { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; opacity: .65; }
+  .fs { font-family: ui-monospace, SF Mono, Menlo, monospace; font-size: 11.5px; line-height: 1.55; background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.06); border-radius: 6px; padding: 10px; white-space: pre; overflow-x: auto; }
+  .fs .dim { opacity: .45; }
+  .fs .hot { color: #8b7cff; font-weight: 600; }
+  .mini-ui { border: 1px solid rgba(255,255,255,.1); border-radius: 6px; padding: 8px; font-size: 11px; background: rgba(255,255,255,.02); }
+  .mini-ui .bar { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px; }
+  .mini-ui .chip { font-size: 9.5px; padding: 2px 6px; border-radius: 10px; background: rgba(139,124,255,.18); color: #c8beff; border: 1px solid rgba(139,124,255,.3); }
+  .mini-ui .row { display: flex; justify-content: space-between; padding: 3px 4px; border-bottom: 1px dashed rgba(255,255,255,.07); }
+  .mini-ui .row:last-child { border: 0; }
+  .mini-ui .row span:first-child { opacity: .85; }
+  .mini-ui .row span:last-child { opacity: .5; font-size: 10px; }
+  .pros-mini { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+  .pros-mini .p { color: #6cd49d; }
+  .pros-mini .c { color: #e89c8a; }
+  .scenario { font-size: 12px; opacity: .75; font-style: italic; border-left: 2px solid rgba(139,124,255,.4); padding-left: 8px; }
+</style>
+
+<div class="topo-grid">
+  <!-- A: Per-project -->
+  <div class="topo option" data-choice="a" onclick="toggleSelect(this)">
+    <div style="display:flex;gap:10px;align-items:center"><div class="letter">A</div><div><h3>Per-project viewer</h3><div class="tag">One viewer per repo</div></div></div>
+
+    <div class="fs"><span class="dim">~/Documents/github/</span>
+<span class="dim">├── </span>aiden_agent/
+<span class="dim">│   └── </span>docs/
+<span class="dim">│       ├── </span>ADR-008.md       <span class="dim">← source</span>
+<span class="dim">│       ├── </span>plans/...
+<span class="dim">│       └── </span><span class="hot">_viewer/</span>          <span class="dim">← gitignored</span>
+<span class="dim">│           └── </span><span class="hot">index.html</span>
+<span class="dim">├── </span>forge/
+<span class="dim">│   └── </span>docs/<span class="hot">_viewer/index.html</span>
+<span class="dim">└── </span>data-entry-website/...</div>
+
+    <div class="mini-ui">
+      <div class="bar"><span class="chip">ADRs (10)</span><span class="chip">Plans (1)</span><span class="chip">Runbooks</span></div>
+      <div class="row"><span>ADR-008 — Clerk JWKS verification</span><span>Accepted</span></div>
+      <div class="row"><span>ADR-009 — Frontend Clerk JWT migration</span><span>Accepted</span></div>
+      <div class="row"><span>2026-05-24 Phase 9a plan</span><span>Active</span></div>
+    </div>
+
+    <div class="pros-mini">
+      <div class="p">+ Ships in the repo, normal git workflow</div>
+      <div class="p">+ Lives next to the code it documents</div>
+      <div class="c">− No cross-project view; open N URLs for N repos</div>
+    </div>
+    <div class="scenario">"I'm working on aiden_agent — open its viewer."</div>
+  </div>
+
+  <!-- B: Global portal -->
+  <div class="topo option" data-choice="b" onclick="toggleSelect(this)">
+    <div style="display:flex;gap:10px;align-items:center"><div class="letter">B</div><div><h3>Global portal</h3><div class="tag">One viewer for everything</div></div></div>
+
+    <div class="fs"><span class="dim">~/Documents/github/</span>
+<span class="dim">├── </span><span class="hot">.docs-portal/</span>          <span class="dim">← the only viewer</span>
+<span class="dim">│   └── </span><span class="hot">index.html</span>
+<span class="dim">│       </span><span class="dim">↓ scans all repos</span>
+<span class="dim">├── </span>aiden_agent/docs/...
+<span class="dim">├── </span>forge/docs/...
+<span class="dim">├── </span>data-entry-website/docs/...
+<span class="dim">└── </span>accounting-agent/docs/...</div>
+
+    <div class="mini-ui">
+      <div class="bar"><span class="chip">Project: all ▾</span><span class="chip">Type: ADR ▾</span><span class="chip">Status: any ▾</span></div>
+      <div class="row"><span>aiden / ADR-008 Clerk JWKS</span><span>2 days ago</span></div>
+      <div class="row"><span>forge / ADR-002 Inline intercept</span><span>1 wk ago</span></div>
+      <div class="row"><span>forge / ADR-003 OAuth re-consent</span><span>1 wk ago</span></div>
+    </div>
+
+    <div class="pros-mini">
+      <div class="p">+ Search every ADR / plan across every project</div>
+      <div class="p">+ One bookmark, one mental model</div>
+      <div class="c">− Not in any repo; deploy separately</div>
+    </div>
+    <div class="scenario">"Show me every ADR about Clerk across all my projects."</div>
+  </div>
+
+  <!-- C: Hybrid -->
+  <div class="topo option" data-choice="c" onclick="toggleSelect(this)">
+    <div style="display:flex;gap:10px;align-items:center"><div class="letter">C</div><div><h3>Hybrid <span style="font-size:10px;color:#8b7cff">(Recommended)</span></h3><div class="tag">Per-project + portal</div></div></div>
+
+    <div class="fs"><span class="dim">~/Documents/github/</span>
+<span class="dim">├── </span><span class="hot">.docs-portal/</span>          <span class="dim">← cross-cutting</span>
+<span class="dim">│   └── </span>index.html
+<span class="dim">├── </span>aiden_agent/docs/
+<span class="dim">│   └── </span><span class="hot">_viewer/index.html</span>   <span class="dim">← in-repo</span>
+<span class="dim">├── </span>forge/docs/<span class="hot">_viewer/...</span>
+<span class="dim">└── </span>...
+<span class="dim">    Same engine, two entry points.</span></div>
+
+    <div class="mini-ui">
+      <div class="bar"><span class="chip">Open <strong>here</strong>: project view</span></div>
+      <div class="row"><span>aiden_agent · ADRs · Plans · Audits</span><span>locked to repo</span></div>
+      <div class="bar" style="margin-top:6px"><span class="chip">Open <strong>portal</strong>: global view</span></div>
+      <div class="row"><span>All projects · cross-cutting filters</span><span>scans github/</span></div>
+    </div>
+
+    <div class="pros-mini">
+      <div class="p">+ Both modes; same renderer + types</div>
+      <div class="p">+ Project viewer ships in repo; portal stays local</div>
+      <div class="c">− Slightly more to maintain (one engine, two shells)</div>
+    </div>
+    <div class="scenario">"Default: work in project. Sometimes: zoom out across projects."</div>
+  </div>
+</div>
+
+<div class="section" style="margin-top: 18px; font-size: 13px; opacity: .8;">
+  <strong>Click A / B / C above</strong> to record your choice — and feel free to add nuance in the terminal (e.g. "C but skip the portal until phase 2").
+</div>

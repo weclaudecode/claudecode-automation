@@ -1,0 +1,118 @@
+<h2>Question 3 — Which artifact types get dedicated layouts?</h2>
+<p class="subtitle">Each type already has its own structure in your repos. <strong>Click to toggle</strong> — green = first-class custom layout, dim = falls back to a generic markdown view. Multi-select.</p>
+
+<style>
+  .types-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-top: 12px; }
+  .typ { border: 1.5px solid rgba(255,255,255,.08); border-radius: 10px; padding: 14px; cursor: pointer; transition: all .15s ease; display: flex; flex-direction: column; gap: 10px; position: relative; }
+  .typ:hover { border-color: #8b7cff; transform: translateY(-1px); }
+  .typ.selected { border-color: #6cd49d; background: rgba(108,212,157,.04); }
+  .typ .head { display: flex; gap: 10px; align-items: center; }
+  .typ .icon { width: 32px; height: 32px; border-radius: 6px; background: rgba(139,124,255,.18); display: flex; align-items: center; justify-content: center; font-size: 16px; }
+  .typ.selected .icon { background: rgba(108,212,157,.18); }
+  .typ h3 { margin: 0; font-size: 15px; }
+  .typ .sub { font-size: 11px; opacity: .65; }
+  .typ .count { position: absolute; top: 12px; right: 12px; font-size: 11px; opacity: .55; font-family: ui-monospace, monospace; }
+  .examples { font-family: ui-monospace, SF Mono, Menlo, monospace; font-size: 11px; line-height: 1.5; background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.06); border-radius: 6px; padding: 8px; opacity: .85; }
+  .layout-needs { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+  .layout-needs .need { display: flex; gap: 6px; align-items: flex-start; }
+  .layout-needs .need .b { color: #8b7cff; font-weight: 700; opacity: .8; }
+  .selected .badge { background: #6cd49d; color: #1a1a1a; }
+  .badge { display: inline-block; padding: 1px 6px; font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; border-radius: 3px; background: rgba(255,255,255,.12); font-weight: 600; }
+</style>
+
+<div class="options" data-multiselect>
+
+<div class="types-grid">
+
+  <div class="option typ selected" data-choice="adr" onclick="toggleSelect(this)">
+    <div class="count">forge: 5 · aiden: 10</div>
+    <div class="head"><div class="icon">📜</div><div><h3>ADR <span class="badge">decision</span></h3><div class="sub">Architecture Decision Records</div></div></div>
+    <div class="examples">ADR-008 Clerk JWKS verification
+ADR-002 Inline intercept state machine
+ADR-003 OAuth scope re-consent</div>
+    <div class="layout-needs">
+      <div class="need"><span class="b">→</span> Status banner (Proposed / Accepted / Superseded)</div>
+      <div class="need"><span class="b">→</span> Supersedes / Superseded-by graph</div>
+      <div class="need"><span class="b">→</span> Sticky TOC: Context / Decision / Consequences</div>
+      <div class="need"><span class="b">→</span> Cross-project: "show all ADRs that mention Clerk"</div>
+    </div>
+  </div>
+
+  <div class="option typ selected" data-choice="plan" onclick="toggleSelect(this)">
+    <div class="count">aiden: 1+ · forge · accounting · data-entry</div>
+    <div class="head"><div class="icon">📋</div><div><h3>Implementation Plan <span class="badge">action</span></h3><div class="sub">Multi-task, phased work</div></div></div>
+    <div class="examples">2026-05-24 Phase 9a — Gateway Interceptor
+2026-05-16 Phase 3 — Strands runtime
+2026-05-20 codebase-audit (with fixes)</div>
+    <div class="layout-needs">
+      <div class="need"><span class="b">→</span> Task checkboxes — live progress %</div>
+      <div class="need"><span class="b">→</span> File-impact table (Create / Modify) sorted by path</div>
+      <div class="need"><span class="b">→</span> "Files touched" → click → see all plans touching it</div>
+      <div class="need"><span class="b">→</span> Phase badge + active/closed status</div>
+    </div>
+  </div>
+
+  <div class="option typ selected" data-choice="review" onclick="toggleSelect(this)">
+    <div class="count">data-entry: 1 audit, 5 findings, fixes/</div>
+    <div class="head"><div class="icon">🔍</div><div><h3>Code Review / Audit <span class="badge">findings</span></h3><div class="sub">Issues with severity + remediation</div></div></div>
+    <div class="examples">2026-05-20 codebase-audit.md
+findings/auth.md · db-schema.md · financial.md
+fixes/...</div>
+    <div class="layout-needs">
+      <div class="need"><span class="b">→</span> Severity filter chips (High / Med / Low)</div>
+      <div class="need"><span class="b">→</span> Finding → Fix link pairing</div>
+      <div class="need"><span class="b">→</span> Open / Resolved status, with strikethrough</div>
+      <div class="need"><span class="b">→</span> File / area grouping</div>
+    </div>
+  </div>
+
+  <div class="option typ selected" data-choice="runbook" onclick="toggleSelect(this)">
+    <div class="count">forge: 3 · aiden: 5</div>
+    <div class="head"><div class="icon">🔧</div><div><h3>Runbook <span class="badge">operational</span></h3><div class="sub">Step-by-step procedures</div></div></div>
+    <div class="examples">phase-10-acceptance.md
+harness-fixture-capture.md
+region-model-availability.md
+phase-5-cross-tenant-rls-check.md</div>
+    <div class="layout-needs">
+      <div class="need"><span class="b">→</span> Numbered steps with "copy command" buttons</div>
+      <div class="need"><span class="b">→</span> Last-run timestamp / outcome (manual or git)</div>
+      <div class="need"><span class="b">→</span> Pre-reqs / rollback callouts</div>
+    </div>
+  </div>
+
+  <div class="option typ selected" data-choice="spec" onclick="toggleSelect(this)">
+    <div class="count">aiden: 2+ · forge implementation brief</div>
+    <div class="head"><div class="icon">📐</div><div><h3>Design Spec <span class="badge">design</span></h3><div class="sub">Brainstorming output, design docs</div></div></div>
+    <div class="examples">2026-05-16 Phase 3 design
+2026-05-16 Phase 4 tavily lambda design
+AgentCore Platform — Implementation Brief</div>
+    <div class="layout-needs">
+      <div class="need"><span class="b">→</span> Diagram-friendly (mermaid/excalidraw embeds)</div>
+      <div class="need"><span class="b">→</span> Link to "Plan that implements this" if exists</div>
+      <div class="need"><span class="b">→</span> Closed / Approved / Draft state</div>
+    </div>
+  </div>
+
+  <div class="option typ" data-choice="other" onclick="toggleSelect(this)">
+    <div class="count">CONTEXT.md · OPEN-QUESTIONS.md · KNOWN-ISSUES.md</div>
+    <div class="head"><div class="icon">📎</div><div><h3>Other / Generic <span class="badge">fallback</span></h3><div class="sub">Living docs, project notes, READMEs</div></div></div>
+    <div class="examples">CONTEXT.md, OPEN-QUESTIONS.md, KNOWN-ISSUES.md
+ARCHITECTURE-REVIEW.md, SYSTEM-PROMPT-v1.md</div>
+    <div class="layout-needs">
+      <div class="need"><span class="b">→</span> Pretty generic-markdown layout (no custom features)</div>
+      <div class="need"><span class="b">→</span> Always available as fallback for any unclassified .md</div>
+      <div class="need" style="opacity:.65"><span class="b">→</span> <em>Selected by default — recommended to keep</em></div>
+    </div>
+  </div>
+
+</div>
+
+</div>
+
+<div class="section" style="margin-top: 18px; font-size: 13px; opacity: .85;">
+  <strong>Currently selected (green):</strong> ADR, Plan, Review, Runbook, Spec. <strong>Other/Generic</strong> is the fallback for any unclassified .md.
+</div>
+
+<div class="section" style="margin-top: 8px; font-size: 12px; opacity: .65;">
+  Click to deselect anything you don't care about. Or add a type I missed in terminal — e.g. "add 'incident postmortem'", or "merge spec + ADR, I treat them the same".
+</div>

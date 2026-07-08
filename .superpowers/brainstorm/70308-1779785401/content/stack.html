@@ -1,0 +1,144 @@
+<h2>Question 7 — Tool stack + how Claude's edits reach your browser</h2>
+<p class="subtitle">Static-build means a builder reads MD and writes HTML. Pick the builder + the workflow that fires it.</p>
+
+<style>
+  :root {
+    --bg-0: #030410; --bg-1: #06081a; --bg-2: #0a0e24;
+    --brand: #7c4dff; --brand-soft: rgba(124,77,255,.18); --brand-glow: rgba(124,77,255,.55);
+    --success: #34d399; --success-soft: rgba(52,211,153,.16);
+    --alert: #ff5577; --alert-soft: rgba(255,85,119,.16);
+    --warn: #ffa500; --warn-soft: rgba(255,165,0,.16);
+    --text: rgba(255,255,255,.94); --text-dim: rgba(255,255,255,.6); --border: rgba(255,255,255,.08);
+  }
+  .stack-shell { background: radial-gradient(circle at 30% 0%, rgba(124,77,255,.15), transparent 55%), linear-gradient(180deg, var(--bg-0), var(--bg-1) 50%, var(--bg-2)); border-radius: 14px; padding: 18px; border: 1px solid rgba(124,77,255,.15); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+  .opt { background: rgba(255,255,255,.035); backdrop-filter: blur(20px); border: 1.5px solid var(--border); border-radius: 12px; padding: 14px; cursor: pointer; transition: all .15s; display: flex; flex-direction: column; gap: 10px; }
+  .opt:hover { border-color: var(--brand); transform: translateY(-2px); box-shadow: 0 12px 32px rgba(0,0,0,.5); }
+  .opt.recommended { border-color: rgba(124,77,255,.4); box-shadow: 0 0 24px rgba(124,77,255,.15); }
+  .opt .head { display: flex; gap: 10px; align-items: center; }
+  .letter { width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, var(--brand), #b388ff); color: white; font-weight: 700; display: flex; align-items: center; justify-content: center; font-size: 14px; box-shadow: 0 0 14px var(--brand-glow); }
+  .opt h3 { margin: 0; font-size: 15px; color: white; }
+  .opt .sub { font-size: 11px; color: var(--text-dim); }
+  .pill-rec { background: var(--success-soft); color: #6ee7b7; border: 1px solid var(--success); padding: 1px 7px; border-radius: 10px; font-size: 9px; font-weight: 700; letter-spacing: .04em; }
+
+  .feature-list { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text); }
+  .feature-list .row { display: flex; gap: 6px; align-items: flex-start; }
+  .feature-list .row .b { color: var(--brand); font-weight: 700; }
+  .feature-list .row.ok .b { color: var(--success); }
+  .feature-list .row.no .b { color: var(--alert); }
+
+  .workflow { background: rgba(0,0,0,.35); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 11px; color: var(--text); }
+  .workflow .step { display: flex; gap: 8px; align-items: flex-start; padding: 3px 0; }
+  .workflow .step .n { background: var(--brand); color: white; border-radius: 50%; min-width: 18px; height: 18px; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+  .workflow .arrow { opacity: .35; text-align: center; padding: 1px 0; font-size: 11px; }
+
+  .stat { display: grid; grid-template-columns: 1fr auto; gap: 6px; font-size: 11.5px; padding: 3px 0; border-bottom: 1px dashed var(--border); }
+  .stat:last-child { border: 0; }
+  .stat .v { font-family: ui-monospace, monospace; }
+  .stat .v.good { color: var(--success); }
+  .stat .v.warn { color: var(--warn); }
+  .stat .v.bad { color: var(--alert); }
+</style>
+
+<div class="stack-shell">
+<div class="grid">
+
+  <!-- A: Astro -->
+  <div class="opt option recommended" data-choice="astro" onclick="toggleSelect(this)">
+    <div class="head"><div class="letter">A</div><div><h3 style="display:flex;gap:6px;align-items:center">Astro <span class="pill-rec">RECOMMENDED</span></h3><div class="sub">SSG with React islands</div></div></div>
+
+    <div class="feature-list">
+      <div class="row ok"><span class="b">✓</span>Content collections w/ TypeScript-typed frontmatter (one schema per type)</div>
+      <div class="row ok"><span class="b">✓</span>Custom layouts per type (one .astro file each)</div>
+      <div class="row ok"><span class="b">✓</span>React islands for search/filter — load only on interactive pages</div>
+      <div class="row ok"><span class="b">✓</span>Total CSS control — Crystal palette ships as-is</div>
+      <div class="row ok"><span class="b">✓</span>Mermaid, shiki syntax highlighting, MDX if needed</div>
+    </div>
+
+    <div class="workflow">
+      <div class="step"><div class="n">1</div><div>Claude edits <code>ADR-008.md</code></div></div>
+      <div class="arrow">↓</div>
+      <div class="step"><div class="n">2</div><div><code>astro dev</code> HMR — browser refreshes in &lt;100ms</div></div>
+      <div class="arrow">↓ (when you want static)</div>
+      <div class="step"><div class="n">3</div><div><code>npm run docs:build</code> → <code>dist/</code> static files</div></div>
+    </div>
+
+    <div>
+      <div class="stat"><span>Setup effort</span><span class="v warn">~2-3 hrs</span></div>
+      <div class="stat"><span>Custom-layout flexibility</span><span class="v good">Total</span></div>
+      <div class="stat"><span>Build speed (per project)</span><span class="v good">&lt;2s</span></div>
+      <div class="stat"><span>Dependencies</span><span class="v warn">Node + astro + few plugins</span></div>
+    </div>
+  </div>
+
+  <!-- B: mkdocs-material -->
+  <div class="opt option" data-choice="mkdocs" onclick="toggleSelect(this)">
+    <div class="head"><div class="letter">B</div><div><h3>mkdocs-material</h3><div class="sub">Python static-site generator</div></div></div>
+
+    <div class="feature-list">
+      <div class="row ok"><span class="b">✓</span>Fastest to set up — works in 15 min</div>
+      <div class="row ok"><span class="b">✓</span>Built-in search (lunr), TOC, dark mode</div>
+      <div class="row no"><span class="b">×</span>Per-type custom layouts require Jinja overrides — painful</div>
+      <div class="row no"><span class="b">×</span>Material Design aesthetic fights Crystal palette</div>
+      <div class="row no"><span class="b">×</span>No React; interactive features = custom JS bolted on</div>
+    </div>
+
+    <div class="workflow">
+      <div class="step"><div class="n">1</div><div>Claude edits <code>ADR-008.md</code></div></div>
+      <div class="arrow">↓</div>
+      <div class="step"><div class="n">2</div><div><code>mkdocs serve</code> auto-rebuilds, browser reloads</div></div>
+      <div class="arrow">↓</div>
+      <div class="step"><div class="n">3</div><div><code>mkdocs build</code> → <code>site/</code> static files</div></div>
+    </div>
+
+    <div>
+      <div class="stat"><span>Setup effort</span><span class="v good">~30 min</span></div>
+      <div class="stat"><span>Custom-layout flexibility</span><span class="v bad">Constrained</span></div>
+      <div class="stat"><span>Build speed</span><span class="v good">&lt;1s</span></div>
+      <div class="stat"><span>Dependencies</span><span class="v good">Python + mkdocs-material</span></div>
+    </div>
+  </div>
+
+  <!-- C: Custom Vite + React -->
+  <div class="opt option" data-choice="vite" onclick="toggleSelect(this)">
+    <div class="head"><div class="letter">C</div><div><h3>Custom Vite + React</h3><div class="sub">Hand-rolled SSG</div></div></div>
+
+    <div class="feature-list">
+      <div class="row ok"><span class="b">✓</span>Total control over everything</div>
+      <div class="row ok"><span class="b">✓</span>React-first; modern stack</div>
+      <div class="row no"><span class="b">×</span>You hand-roll content loading, frontmatter parsing, route gen, etc.</div>
+      <div class="row no"><span class="b">×</span>Re-inventing what Astro already gives you</div>
+      <div class="row no"><span class="b">×</span>Ongoing maintenance cost</div>
+    </div>
+
+    <div class="workflow">
+      <div class="step"><div class="n">1</div><div>Claude edits <code>ADR-008.md</code></div></div>
+      <div class="arrow">↓</div>
+      <div class="step"><div class="n">2</div><div><code>vite dev</code> HMR — also fast</div></div>
+      <div class="arrow">↓</div>
+      <div class="step"><div class="n">3</div><div><code>vite build</code> + custom SSG script → static files</div></div>
+    </div>
+
+    <div>
+      <div class="stat"><span>Setup effort</span><span class="v bad">~1-2 days</span></div>
+      <div class="stat"><span>Custom-layout flexibility</span><span class="v good">Total</span></div>
+      <div class="stat"><span>Build speed</span><span class="v good">&lt;2s</span></div>
+      <div class="stat"><span>Dependencies</span><span class="v warn">Node + many manual choices</span></div>
+    </div>
+  </div>
+
+</div>
+
+<div style="margin-top:14px;padding:12px 14px;background:rgba(124,77,255,.08);border:1px solid rgba(124,77,255,.25);border-radius:8px;font-size:12.5px;color:var(--text)">
+  <strong style="color:#c8b3ff">Why Astro:</strong> it's the only stack that natively handles per-type layouts (Plan vs ADR vs Review) via content collections, supports React islands for search/filters, and lets the Crystal palette ship as plain CSS without fighting a framework. mkdocs is faster to set up but you'd hit the wall when designing the Plan card with task progress. Vite is what Astro is built on top of — no reason to redo that work.
+</div>
+
+<div class="section" style="margin-top: 14px; font-size: 13px; color: white; opacity: .9;">
+  <strong>Default workflow if A:</strong> open one terminal with <code>npm run docs:dev</code> while editing; Claude edits MD, browser auto-refreshes. For "static viewing" or sharing, run <code>npm run docs:build</code> any time — output is plain HTML you can open via <code>file://</code> or commit alongside the repo.
+</div>
+
+<div class="section" style="margin-top: 6px; font-size: 12px; color: var(--text-dim);">
+  Click A / B / C. In terminal — say if you want to skip the dev server entirely and only ever use <code>build</code>, or vice versa.
+</div>
+
+</div>
